@@ -2,13 +2,13 @@
 // dashboard_api.h — envia as medicoes para a API (back-end / dashboard)
 // -----------------------------------------------------------------------------
 // Cada medicao:
-//   1. vira um JSON no formato combinado com o back-end (docs/comunicacao_api_esp32.pdf);
+//   1. vira um JSON: as 8 cores (valor e %), a turbidez em NTU e o diagnostico;
 //   2. vai por POST para {API_URL}/api/leituras/ com o header X-API-Key:
 //        2xx -> ENVIADO
 //        sem internet / erro 5xx -> GUARDADO em /pendentes.jsonl e reenviado depois
 //        4xx (chave errada, JSON invalido) -> RECUSADO (reenviar nao resolve)
 //   3. tambem vira uma linha em /historico.csv na placa (backup de TUDO,
-//      exportado com o comando e e lido por tools/gerar_relatorio.py).
+//      exportado com o comando e).
 // Os dois arquivos ficam na memoria flash (LittleFS): nao somem ao desligar.
 // =============================================================================
 
@@ -37,14 +37,26 @@ constexpr uint8_t REENVIOS_POR_VEZ = 10;
 
 enum class Envio { ENVIADO, GUARDADO, FILA_CHEIA, RECUSADO, SEM_DATA };
 
+// Diagnostico calculado no main.cpp (comparando com o padrao de agua limpa).
+struct Diagnostico {
+  float porcentagem[sensor_config::CORES];  // % de luz que passou em cada cor
+  const char* turbidez;                     // LIMPA | LEVEMENTE TURVA | TURVA | MUITO TURVA
+  const char* algas;                        // NAO DETECTADAS | SINAL FRACO | PRESENTES
+  const char* cor;                          // NORMAL | LEVEMENTE AMARELADA | COR DE CHA
+  bool temContaminacao;                     // so depois do ensaio (agua podre medida)
+  float contaminacaoPct;                    // 0 = agua limpa, 100 = agua podre
+  const char* contaminacao;                 // em palavras
+  String resumo;                            // ex.: "Agua turva, sem sinal de algas, cor normal."
+};
+
 // Tudo que vai no JSON de uma medicao.
 struct Medicao {
-  const char* tipo;     // escuro | branco (padrao de agua limpa) | amostra
+  const char* tipo;     // branco (agua limpa de referencia) | amostra
   const char* amostra;  // nome da agua no pote (comando n), ex.: lagoa
-  uint8_t replica;      // 1 a 255
-  uint16_t ganho;
+  uint16_t ganho;       // so para o historico CSV
   const sensor_config::Resultado* cor;
   const turbidez_config::Resultado* turbidez;
+  const Diagnostico* diagnostico;
 };
 
 inline size_t& linhasHistorico() {
@@ -87,13 +99,17 @@ inline String montarJson(const Medicao& m, const char* data) {
   char medidoEm[26];
   wifi_config::agora(medidoEm, sizeof(medidoEm), "%Y-%m-%dT%H:%M:%S-03:00");
 
+  const Diagnostico& d = *m.diagnostico;
+
   JsonDocument doc;
   doc["data_coleta"] = data;
-  if (medidoEm[0] != '\0') doc["medido_em"] = medidoEm;  // hora real da medicao
+  doc["medido_em"] = medidoEm;  // hora real da medicao
   doc["tipo"] = m.tipo;
   doc["amostra"] = m.amostra;
-  doc["led"] = strcmp(m.tipo, "escuro") == 0 ? "nenhum" : "frente";
-  doc["replica"] = m.replica;
+
+  // Campos que o back-end exige (formato combinado no PDF de comunicacao).
+  doc["led"] = "frente";  // a lanterna atravessa a agua
+  doc["replica"] = 1;
   doc["ganho"] = m.ganho;
   doc["atime"] = sensor_config::ATIME;
   doc["astep"] = sensor_config::ASTEP;
@@ -102,25 +118,76 @@ inline String montarJson(const Medicao& m, const char* data) {
   JsonObject media = doc["media"].to<JsonObject>();
   JsonObject desvio = doc["desvio"].to<JsonObject>();
   for (uint8_t c = 0; c < sensor_config::CANAIS; ++c) {
-    media[sensor_config::NOME_CANAL[c]] = serialized(String(m.cor->media[c], 1));
-    desvio[sensor_config::NOME_CANAL[c]] = serialized(String(m.cor->desvio[c], 1));
+    char chave[8];
+    if (c < sensor_config::CORES) {
+      snprintf(chave, sizeof(chave), "f%u_%u", c + 1, sensor_config::ONDA_NM[c]);
+    } else {
+      strcpy(chave, c == sensor_config::CLEAR ? "clear" : "nir");
+    }
+    media[chave] = serialized(String(m.cor->media[c], 1));
+    desvio[chave] = serialized(String(m.cor->desvio[c], 1));
   }
   if (m.turbidez->valido) {
-    doc["turbidez_mv"] = serialized(String(m.turbidez->mediaMv, 1));
-    doc["dp_turbidez_mv"] = serialized(String(m.turbidez->desvioMv, 1));
+    doc["turbidez_mv"] = serialized(String(m.turbidez->mediaMv, 0));
+    doc["dp_turbidez_mv"] = serialized(String(m.turbidez->desvioMv, 0));
   } else {
     doc["turbidez_mv"] = nullptr;
     doc["dp_turbidez_mv"] = nullptr;
   }
+
+  // Turbidez em NTU (null se o sensor de turbidez nao estiver ligado).
+  JsonObject turbidez = doc["turbidez"].to<JsonObject>();
+  if (m.turbidez->temNtu()) {
+    turbidez["ntu"] = serialized(String(m.turbidez->ntu, 1));
+    turbidez["tensao_v"] = serialized(String(m.turbidez->mediaMv / 1000.0f, 2));
+  } else {
+    turbidez["ntu"] = nullptr;
+    turbidez["tensao_v"] = nullptr;
+  }
+  turbidez["classificacao"] = d.turbidez;
+
+  // As 8 cores: nome, comprimento de onda, numero captado e % de luz que passou.
+  JsonArray cores = doc["cores"].to<JsonArray>();
+  for (uint8_t c = 0; c < sensor_config::CORES; ++c) {
+    JsonObject cor = cores.add<JsonObject>();
+    cor["nome"] = sensor_config::NOME_COR[c];
+    cor["comprimento_onda_nm"] = sensor_config::ONDA_NM[c];
+    cor["valor"] = static_cast<uint32_t>(round(m.cor->media[c]));
+    cor["porcentagem"] = serialized(String(d.porcentagem[c], 1));
+  }
+
+  // Diagnostico em palavras.
+  JsonObject diag = doc["diagnostico"].to<JsonObject>();
+  diag["turbidez"] = d.turbidez;
+  diag["algas"] = d.algas;
+  diag["cor"] = d.cor;
+  if (d.temContaminacao) {
+    diag["contaminacao_pct"] = static_cast<int>(round(d.contaminacaoPct));
+    diag["contaminacao"] = d.contaminacao;
+  } else {
+    diag["contaminacao_pct"] = nullptr;
+    diag["contaminacao"] = nullptr;
+  }
+  diag["resumo"] = d.resumo;
+
   String json;
   serializeJson(doc, json);
   return json;
 }
 
 // ---- Envio e fila ---------------------------------------------------------------
+// Motivo da ultima falha de envio, para mostrar no monitor.
+inline String& ultimoErro() {
+  static String erro;
+  return erro;
+}
+
 // Codigo HTTP da resposta, ou negativo se nem chegou na API.
-inline int post(Stream& serial, const String& json) {
-  if (!wifi_config::conectado()) return -1;  // sem Wi-Fi: vai para a fila
+inline int post(const String& json) {
+  if (!wifi_config::conectado()) {
+    ultimoErro() = "sem Wi-Fi";
+    return -1;  // vai para a fila
+  }
   const String url = String(secrets::API_URL) + "/api/leituras/";
   WiFiClientSecure seguro;  // https:// (Render)
   WiFiClient simples;       // http:// (API rodando num computador, para testar)
@@ -131,9 +198,10 @@ inline int post(Stream& serial, const String& json) {
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-API-Key", secrets::API_KEY);
   const int codigo = http.POST(json);
-  if (codigo >= 400 && codigo < 500) {
-    serial.print(F("# O servidor respondeu: "));
-    serial.println(http.getString().substring(0, 300));
+  if (codigo < 0) {
+    ultimoErro() = "o servidor nao respondeu (" + HTTPClient::errorToString(codigo) + ")";
+  } else if (codigo >= 300) {
+    ultimoErro() = "HTTP " + String(codigo) + ": " + http.getString().substring(0, 200);
   }
   http.end();
   return codigo;
@@ -167,7 +235,7 @@ inline void reenviarPendentes(Stream& serial) {
       continue;
     }
     ++tentativas;
-    const int codigo = post(serial, linha);
+    const int codigo = post(linha);
     if (tentarDeNovo(codigo)) {
       restantes += linha + '\n';
       falhou = true;
@@ -195,7 +263,7 @@ inline Envio enviar(Stream& serial, const Medicao& m) {
     return Envio::SEM_DATA;  // sem data a API nao sabe a qual coleta pertence
   }
   const String json = montarJson(m, data);
-  const int codigo = post(serial, json);
+  const int codigo = post(json);
   if (codigo >= 200 && codigo < 300) {
     reenviarPendentes(serial);  // internet ok: aproveita e manda as antigas
     return Envio::ENVIADO;
@@ -221,7 +289,7 @@ inline bool registrar(const Medicao& m) {
   String nome = m.amostra;
   nome.replace(',', '_');  // virgula quebraria as colunas
 
-  String linha = strcmp(m.tipo, "branco") == 0 ? "padrao" : m.tipo;
+  String linha = m.tipo;
   linha += ","; linha += nome;
   linha += ","; linha += quando;
   linha += ","; linha += millis() / 1000UL;

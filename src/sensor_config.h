@@ -48,10 +48,11 @@ const as7341_color_channel_t CANAL[CANAIS] = {
   AS7341_CHANNEL_CLEAR,     // luz total
   AS7341_CHANNEL_NIR,       // infravermelho (~910 nm)
 };
-const char* const NOME_CANAL[CANAIS] = {
-  "f1_415", "f2_445", "f3_480", "f4_515", "f5_555",
-  "f6_590", "f7_630", "f8_680", "clear", "nir",
+// Nome e comprimento de onda (nm) das 8 cores visiveis, como vao no JSON.
+const char* const NOME_COR[CORES] = {
+  "Violeta", "Azul", "Ciano", "Verde", "Verde-amarelo", "Amarelo", "Laranja", "Vermelho",
 };
+const uint16_t ONDA_NM[CORES] = {415, 445, 480, 515, 555, 590, 630, 680};
 
 struct Resultado {
   float media[CANAIS];

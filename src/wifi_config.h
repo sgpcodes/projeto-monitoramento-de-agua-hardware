@@ -1,7 +1,7 @@
 // =============================================================================
 // wifi_config.h — conexao Wi-Fi e hora certa pela internet
 // -----------------------------------------------------------------------------
-// Nome e senha da rede ficam em secrets.h. O ESP32 so conecta em Wi-Fi 2,4 GHz.
+// Nome e senha das duas redes ficam em secrets.h. O ESP32 so conecta em Wi-Fi 2,4 GHz.
 // O ESP32 nao tem relogio com bateria: ao ligar, ele pega a hora em servidores
 // NTP na internet (horario de Brasilia) e dai o relogio interno anda sozinho.
 // =============================================================================
@@ -11,6 +11,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiMulti.h>
 #include <time.h>
 
 #include "secrets.h"
@@ -20,32 +21,16 @@ namespace wifi_config {
 constexpr uint32_t TIMEOUT_MS = 20000;      // desiste de conectar depois de 20 s
 constexpr char FUSO_BRASILIA[] = "<-03>3";  // UTC-3, sem horario de verao
 
-inline bool conectar(Stream& serial) {
-  if (WiFi.status() == WL_CONNECTED) {
-    return true;
+// As duas redes do secrets.h; o ESP32 escolhe a que estiver com sinal.
+inline WiFiMulti& redes() {
+  static WiFiMulti multi;
+  static bool cadastradas = false;
+  if (!cadastradas) {
+    multi.addAP(secrets::WIFI_SSID, secrets::WIFI_PASSWORD);
+    multi.addAP(secrets::WIFI_SSID_2, secrets::WIFI_PASSWORD_2);
+    cadastradas = true;
   }
-  WiFi.mode(WIFI_STA);
-  WiFi.setAutoReconnect(true);  // se o sinal cair depois, reconecta sozinho
-  WiFi.begin(secrets::WIFI_SSID, secrets::WIFI_PASSWORD);
-  serial.print(F("# Conectando Wi-Fi"));
-  const uint32_t inicio = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - inicio < TIMEOUT_MS) {
-    delay(500);
-    serial.print('.');
-  }
-  serial.println();
-  if (WiFi.status() != WL_CONNECTED) {
-    serial.println(F("# Wi-Fi indisponivel. As medicoes ficam guardadas e sao enviadas depois."));
-    return false;
-  }
-  serial.print(F("# Wi-Fi conectado: "));
-  serial.println(WiFi.localIP());
-  return true;
-}
-
-inline void iniciar(Stream& serial) {
-  conectar(serial);
-  configTzTime(FUSO_BRASILIA, "pool.ntp.org", "time.google.com");
+  return multi;
 }
 
 inline bool conectado() { return WiFi.status() == WL_CONNECTED; }
@@ -59,6 +44,43 @@ inline bool agora(char* destino, size_t tamanho, const char* formato, uint32_t e
   }
   strftime(destino, tamanho, formato, &t);
   return true;
+}
+
+// Conecta na rede disponivel (das duas do secrets.h) e espera a hora chegar.
+// mostrar = false: tenta em silencio (antes de cada envio).
+inline bool conectar(Stream& serial, bool mostrar = true) {
+  if (conectado()) return true;
+  WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);  // se o sinal cair depois, reconecta sozinho
+  if (mostrar) serial.print(F("# Conectando Wi-Fi..."));
+  const uint32_t inicio = millis();
+  while (redes().run() != WL_CONNECTED && millis() - inicio < TIMEOUT_MS) {
+    if (mostrar) serial.print('.');
+  }
+  if (!mostrar) {
+    tm t;
+    if (conectado()) getLocalTime(&t, 10000);  // espera a hora, sem imprimir
+    return conectado();
+  }
+  serial.println();
+  if (!conectado()) {
+    serial.println(F("# Wi-Fi indisponivel (nenhuma das redes). Tento de novo na proxima medicao."));
+    return false;
+  }
+  serial.printf("# Wi-Fi conectado na rede %s (%s)\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
+
+  char hora[20];
+  if (agora(hora, sizeof(hora), "%d/%m/%Y %H:%M:%S", 10000)) {
+    serial.printf("# Hora certa: %s\n", hora);
+  } else {
+    serial.println(F("# A hora da internet ainda nao chegou. Tento de novo na proxima medicao."));
+  }
+  return true;
+}
+
+inline void iniciar(Stream& serial) {
+  configTzTime(FUSO_BRASILIA, "pool.ntp.org", "time.google.com");
+  conectar(serial);
 }
 
 }  // namespace wifi_config
