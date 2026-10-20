@@ -185,14 +185,15 @@ void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, co
     Serial.println(F(" SUJA\n"));
   }
   if (t.temNtu()) {
-    Serial.printf(" Turbidez  %s (%.0f NTU)\n", d.turbidez, t.ntu);
+    Serial.printf(" Turbidez  %s (%.0f NTU, sensor em %.2f V)\n", d.turbidez, t.ntu, t.mediaMv / 1000.0f);
   } else {
-    Serial.printf(" Turbidez  %s\n", d.turbidez);
+    Serial.printf(" Turbidez  %s (pelo sensor de cor)\n", d.turbidez);
   }
   Serial.printf(" Algas     %s\n Cor       %s\n\n", d.algas, d.cor);
 
+  Serial.println(F(" Cor            Onda    Valor   Luz que passou"));
   for (uint8_t c = 0; c < CORES; ++c) {
-    Serial.printf(" %-13s %3u nm ", sensor_config::NOME_COR[c], sensor_config::ONDA_NM[c]);
+    Serial.printf(" %-13s %3u nm %6.0f  ", sensor_config::NOME_COR[c], sensor_config::ONDA_NM[c], r.media[c]);
     barra(x.luz[c]);
     Serial.printf(" %3.0f%%\n", d.porcentagem[c]);
   }
@@ -220,9 +221,20 @@ void relatarEEnviar(const char* tipo, const char* nome, const char* titulo, cons
   imprimirRelatorio(titulo, r, t, x, d);
   const dashboard_api::Medicao m = {tipo, nome, sensor_config::ganhoEmX(estado.ganho), &r, &t, &d};
   wifi_config::conectar(Serial, false);  // se caiu ou nunca conectou, tenta de novo
-  imprimirEnvio(dashboard_api::enviar(Serial, m));
+  const dashboard_api::Envio envio = dashboard_api::enviar(m);
+  imprimirEnvio(envio);
   if (!dashboard_api::registrar(m)) Serial.println(F(" ✗ Historico CHEIO: baixe com e e digite apagar sim"));
+
+  // Hora da proxima medicao automatica (pela hora da internet, se ja tiver).
+  time_t proxima = time(nullptr) + INTERVALO_MS / 1000;
+  char hora[6];
+  if (estado.automatico && proxima > 1700000000) {
+    strftime(hora, sizeof(hora), "%H:%M", localtime(&proxima));
+    Serial.printf(" Proxima medicao: %s\n", hora);
+  }
   linha();
+  // Internet ok: aproveita e manda as medicoes antigas guardadas (depois do relatorio).
+  if (envio == dashboard_api::Envio::ENVIADO) dashboard_api::reenviarPendentes(Serial);
 }
 
 // Guarda a medicao como padrao de agua limpa, se a luz estiver boa.

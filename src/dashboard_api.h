@@ -35,6 +35,8 @@ constexpr uint16_t TIMEOUT_MS = 30000;               // Render gratis pode levar
 constexpr size_t LIMITE_PENDENTES = 300UL * 1024UL;  // ~500 medicoes esperando envio
 constexpr size_t LIMITE_HISTORICO = 900UL * 1024UL;  // ~6.500 medicoes = ~4,5 dias
 constexpr uint8_t REENVIOS_POR_VEZ = 10;
+constexpr size_t MAX_LINHA = 2048;                   // uma medicao em JSON tem ~1,3 KB
+constexpr size_t LIMITE_RESTANTES = 60UL * 1024UL;  // o que cabe na RAM ao reescrever a fila
 
 enum class Envio { ENVIADO, GUARDADO, FILA_CHEIA, RECUSADO, SEM_DATA };
 
@@ -196,41 +198,42 @@ inline int post(const String& json) {
 
 inline bool tentarDeNovo(int codigo) { return codigo < 0 || codigo >= 500; }
 
-inline size_t contarPendentes() {
-  File f = LittleFS.open(PENDENTES, FILE_READ);
-  if (!f) return 0;
-  size_t total = 0;
-  while (f.available()) total += f.readStringUntil('\n').length() > 1;
-  f.close();
-  return total;
-}
-
-// Tenta mandar ate 10 pendentes. Para na primeira falha de rede; o resto fica.
+// Manda ate 10 medicoes guardadas sem internet. Para na primeira falha de rede;
+// as outras ficam para a proxima vez. Linhas recusadas (4xx) sao descartadas.
 inline void reenviarPendentes(Stream& serial) {
-  if (!LittleFS.exists(PENDENTES) || !wifi_config::conectado()) return;
+  if (tamanho(PENDENTES) == 0 || !wifi_config::conectado()) return;
+  static char linha[MAX_LINHA];  // tamanho fixo: arquivo estragado nao trava nem estoura a memoria
   File f = LittleFS.open(PENDENTES, FILE_READ);
   String restantes;
+  uint16_t enviadas = 0, recusadas = 0, esperando = 0;
   uint8_t tentativas = 0;
-  uint16_t enviadas = 0;
   bool falhou = false;
   while (f.available()) {
     esp_task_wdt_reset();  // cada envio pode levar ate 30 s
     const size_t antes = f.position();
-    String linha = f.readStringUntil('\n');
+    const size_t n = f.readBytesUntil('\n', linha, sizeof(linha) - 1);
     if (f.position() == antes) break;  // arquivo corrompido nao avanca: descarta o resto
-    linha.trim();
-    if (linha.isEmpty()) continue;
+    linha[n] = '\0';
+    String json(linha);
+    json.trim();
+    if (json.isEmpty()) continue;
     if (falhou || tentativas >= REENVIOS_POR_VEZ) {
-      restantes += linha + '\n';
+      if (restantes.length() + json.length() < LIMITE_RESTANTES) {
+        restantes += json + '\n';
+        ++esperando;
+      }
       continue;
     }
     ++tentativas;
-    const int codigo = post(linha);
+    const int codigo = post(json);
     if (tentarDeNovo(codigo)) {
-      restantes += linha + '\n';
+      restantes += json + '\n';
+      ++esperando;
       falhou = true;
     } else if (codigo < 300) {
       ++enviadas;
+    } else {
+      ++recusadas;
     }
   }
   f.close();
@@ -240,24 +243,17 @@ inline void reenviarPendentes(Stream& serial) {
     novo.print(restantes);
     novo.close();
   }
-  if (enviadas > 0) {
-    serial.print(F("# "));
-    serial.print(enviadas);
-    serial.println(F(" medicoes antigas (guardadas sem internet) foram enviadas."));
-  }
+  serial.printf("# Fila sem internet: %u reenviadas, %u recusadas, %u esperando.\n", enviadas, recusadas, esperando);
 }
 
-inline Envio enviar(Stream& serial, const Medicao& m) {
+inline Envio enviar(const Medicao& m) {
   char data[11];
   if (!wifi_config::agora(data, sizeof(data), "%Y-%m-%d", 2000)) {
     return Envio::SEM_DATA;  // sem data a API nao sabe a qual coleta pertence
   }
   const String json = montarJson(m, data);
   const int codigo = post(json);
-  if (codigo >= 200 && codigo < 300) {
-    reenviarPendentes(serial);  // internet ok: aproveita e manda as antigas
-    return Envio::ENVIADO;
-  }
+  if (codigo >= 200 && codigo < 300) return Envio::ENVIADO;
   if (tentarDeNovo(codigo)) {
     if (tamanho(PENDENTES) + json.length() > LIMITE_PENDENTES) return Envio::FILA_CHEIA;
     File f = LittleFS.open(PENDENTES, FILE_APPEND);
