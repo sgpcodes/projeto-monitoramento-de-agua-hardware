@@ -26,6 +26,8 @@ constexpr char WIFI_SSID_2[] = "OUTRA_REDE";        // ex.: Wi-Fi de casa
 constexpr char WIFI_PASSWORD_2[] = "SENHA_DA_OUTRA_REDE";
 constexpr char WIFI_SSID_3[] = "TERCEIRA_REDE";      // ex.: celular
 constexpr char WIFI_PASSWORD_3[] = "SENHA_DA_TERCEIRA_REDE";
+constexpr char WIFI_SSID_4[] = "QUARTA_REDE";
+constexpr char WIFI_PASSWORD_4[] = "SENHA_DA_QUARTA_REDE";
 constexpr char API_URL[] = "https://SUA-API.onrender.com";  // sem "/" no final
 constexpr char API_KEY[] = "CHAVE_COMBINADA_COM_O_BACK_END";
 }
@@ -66,7 +68,7 @@ Mudou alguma coisa (lanterna, pote, água de referência)? Aperte o botão **BOO
 
 ## Dados
 
-- **Wi-Fi:** o ESP32 conecta em qualquer uma das três redes do `secrets.h` e pega a hora da internet. Se cair, ele tenta de novo a cada medição. Embaixo de cada relatório aparece `✓ Enviado com sucesso` ou `✗ Erro:` com o motivo.
+- **Wi-Fi:** o ESP32 conecta em qualquer uma das redes do `secrets.h` (até 4) e pega a hora da internet. Se cair, ele tenta de novo a cada medição. Embaixo de cada relatório aparece `✓ Enviado com sucesso` ou `✗ Erro:` com o motivo.
 - **API:** cada medição vai por `POST {API_URL}/api/leituras/` com o header `X-API-Key` (formato abaixo). A API deve responder 201; com 401/400 o ESP32 mostra o erro, e sem resposta ou com 5xx ele guarda e reenvia depois.
 - **Sem internet:** as medições ficam numa fila na placa e são reenviadas depois.
 - **Histórico:** toda medição também fica em `historico.csv` na placa (~4,5 dias). Exporte com `e`.
