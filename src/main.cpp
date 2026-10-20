@@ -224,6 +224,17 @@ void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, co
   }
   if (r.saturado) Serial.println(F(" ⚠ Luz forte demais (sensor estourou): diminua o ganho, ex.: g 16"));
   if (t.semSinal()) Serial.println(F(" ⚠ Sensor de turbidez SEM SINAL: confira os fios e a chave D/A em \"A\"."));
+  if (t.noMaximo()) {
+    Serial.printf(" ⚠ Sensor de turbidez travado no maximo (%.2f V): turbidez estimada pelo sensor de cor.\n"
+                  "   Confira a chave D/A em \"A\" e os resistores do divisor.\n", t.mediaMv / 1000.0f);
+  }
+  float maiorLuz = 0;
+  for (uint8_t c = 0; c < CORES; ++c) maiorLuz = max(maiorLuz, x.luz[c]);
+  if (temPadrao() && maiorLuz > 1.10f) {
+    Serial.printf(" ⚠ LEITURA SUSPEITA: uma cor passou %.0f%% (mais luz que na agua limpa).\n"
+                  "   Entrou luz de fora ou a lanterna mudou: feche a caixa ou regrave a agua limpa (BOOT -> 1).\n",
+                  maiorLuz * 100.0f);
+  }
   Serial.println();
 }
 

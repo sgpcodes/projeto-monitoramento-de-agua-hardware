@@ -31,6 +31,9 @@ constexpr float FATOR_DIVISOR = (R1_OHMS + R2_OHMS) / R2_OHMS;  // = 1,5
 constexpr uint8_t LEITURAS = 20;
 constexpr uint8_t OVERSAMPLE = 16;     // o ADC do ESP32 e ruidoso: media de 16 conversoes
 constexpr float MINIMO_MV = 500.0f;    // abaixo disso: fio solto / sem energia
+// Acima disso o pino passou de ~3,1 V: o ADC do ESP32 travou no maximo e o valor
+// nao vale (chave D/A em "D", ou divisor ligado errado). Agua limpa da ~4,1 V.
+constexpr float MAXIMO_MV = 4550.0f;
 
 // CALIBRACAO: com AGUA LIMPA no pote, a medicao deve dar perto de 0 NTU.
 // Se der mais, aumente este valor (em volts) ate chegar perto de 0. Ex.: 0.15
@@ -58,8 +61,10 @@ struct Resultado {
 
   // Ligado mas sem sinal (tensao quase zero): nao e "agua turva", e defeito.
   bool semSinal() const { return valido && mediaMv < MINIMO_MV; }
+  // Travado no maximo da leitura: tambem e defeito, nao "agua limpissima".
+  bool noMaximo() const { return valido && mediaMv >= MAXIMO_MV; }
   // Leitura confiavel para mostrar/enviar em NTU.
-  bool temNtu() const { return valido && !semSinal(); }
+  bool temNtu() const { return valido && !semSinal() && !noMaximo(); }
 };
 
 inline void iniciar() {
