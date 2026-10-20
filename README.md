@@ -64,6 +64,16 @@ Chave D/A da plaquinha de turbidez em **A**. Se o sensor de turbidez não estive
 | `e` | Exportar o histórico CSV |
 | `apagar sim` | Apagar o histórico (baixe antes) |
 
+**Nomes das amostras** (comando `n NOME`, o dashboard junta as 3 últimas medições de cada nome):
+
+| Amostra | Nome |
+|---|---|
+| Água boa (controle) | `agua_boa` |
+| Água podre | gravada com BOOT → 2 (`agua_podre`) |
+| Pontos da lagoa | `lagoa_p1`, `lagoa_p2`, `lagoa_p3` |
+| Referências | `ref_cha`, `ref_terra`, `ref_algas` |
+| Série de diluição | `dil_<corante>_<concentração>`, ex.: `dil_amarelo_25`, `dil_amarelo_50`, `dil_amarelo_100` |
+
 Mudou alguma coisa (lanterna, pote, água de referência)? Aperte o botão **BOOT** da placa (ou digite `gravar`) e escolha o que regravar. A nova referência também vai para o dashboard. Botão externo: ligue entre o GPIO 4 e o GND e mude `PINO_BOTAO` para 4 no `main.cpp`.
 
 ## Dados
