@@ -133,8 +133,11 @@ const char* palavraTurbidez(const Indices& x, const turbidez_config::Resultado& 
   const float v = x.turbidezCor;
   return v < 0.05f ? "LIMPA" : v < 0.15f ? "LEVEMENTE TURVA" : v < 0.35f ? "TURVA" : "MUITO TURVA";
 }
-const char* palavraAlgas(float v) { return v < 0.02f ? "NAO DETECTADAS" : v < 0.08f ? "SINAL FRACO" : "PRESENTES"; }
-const char* palavraCor(float v) { return v < 0.03f ? "NORMAL" : v < 0.10f ? "LEVEMENTE AMARELADA" : "COR DE CHA"; }
+// Mesmos limites do dashboard: abaixo de 0,05 baixo; ate 0,20 moderado; acima alto.
+constexpr float INDICE_MODERADO = 0.05f;
+constexpr float INDICE_ALTO = 0.20f;
+const char* palavraAlgas(float v) { return v < INDICE_MODERADO ? "NAO DETECTADAS" : v <= INDICE_ALTO ? "SINAL FRACO" : "PRESENTES"; }
+const char* palavraCor(float v) { return v < INDICE_MODERADO ? "NORMAL" : v <= INDICE_ALTO ? "LEVEMENTE AMARELADA" : "COR DE CHA"; }
 const char* palavraContaminacao(float v) {
   return v < 0.10f ? "MUITO PROXIMA DA AGUA LIMPA" : v < 0.30f ? "LEVEMENTE CONTAMINADA"
          : v < 0.60f ? "CONTAMINADA" : v <= 1.0f ? "MUITO CONTAMINADA" : "PIOR QUE A AGUA PODRE";
@@ -154,8 +157,8 @@ dashboard_api::Diagnostico diagnosticar(const Indices& x, const turbidez_config:
   String turb = d.turbidez;
   turb.toLowerCase();
   d.resumo = "Agua " + turb + ", " +
-             (x.algas < 0.02f ? "sem sinal de algas" : x.algas < 0.08f ? "com sinal fraco de algas" : "com sinal de algas") +
-             ", " + (x.cor < 0.03f ? "cor normal" : x.cor < 0.10f ? "levemente amarelada" : "cor de cha") + ".";
+             (x.algas < INDICE_MODERADO ? "sem sinal de algas" : x.algas <= INDICE_ALTO ? "com sinal fraco de algas" : "com sinal de algas") +
+             ", " + (x.cor < INDICE_MODERADO ? "cor normal" : x.cor <= INDICE_ALTO ? "levemente amarelada" : "cor de cha") + ".";
   return d;
 }
 
