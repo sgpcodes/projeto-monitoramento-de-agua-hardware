@@ -66,10 +66,7 @@ Mexeu na lanterna (posição, brilho, pilha)? Coloque água limpa e digite `c`.
 
 - **API:** cada medição vai por `POST {API_URL}/api/leituras/` com o header `X-API-Key`. O formato do JSON e as respostas esperadas estão no documento de comunicação com a API, entregue à equipe de back-end.
 - **Sem internet:** as medições ficam numa fila na placa e são reenviadas depois.
-- **Histórico:** toda medição também fica em `historico.csv` na placa (~4,5 dias). Exporte com `e` e gere o relatório comparativo com:
-  ```
-  python3 tools/gerar_relatorio.py historico.csv
-  ```
+- **Histórico:** toda medição também fica em `historico.csv` na placa (~4,5 dias). Exporte com `e`.
 - **Monitor:** tudo que aparece no monitor serial também fica salvo em `logs/`.
 
 ## Limites
