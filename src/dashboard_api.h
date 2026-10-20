@@ -112,10 +112,11 @@ inline String montarJson(const Medicao& m, const char* data) {
   doc["tipo"] = m.tipo;
   doc["amostra"] = m.amostra;
 
-  // Canais crus (o dashboard calcula os graficos a partir deles), ganho e saturacao.
+  // Canais crus e desvio padrao (barras de erro no dashboard), ganho e saturacao.
   doc["ganho"] = m.ganho;
   doc["saturado"] = m.cor->saturado;
   JsonObject media = doc["media"].to<JsonObject>();
+  JsonObject desvio = doc["desvio"].to<JsonObject>();
   for (uint8_t c = 0; c < sensor_config::CANAIS; ++c) {
     char chave[8];
     if (c < sensor_config::CORES) {
@@ -124,6 +125,7 @@ inline String montarJson(const Medicao& m, const char* data) {
       strcpy(chave, c == sensor_config::CLEAR ? "clear" : "nir");
     }
     media[chave] = serialized(String(m.cor->media[c], 1));
+    desvio[chave] = serialized(String(m.cor->desvio[c], 1));
   }
 
   // Turbidez em NTU (null se o sensor de turbidez nao estiver ligado).
