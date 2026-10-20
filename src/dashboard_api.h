@@ -68,6 +68,7 @@ inline size_t& linhasHistorico() {
 }
 
 inline size_t tamanho(const char* caminho) {
+  if (!LittleFS.exists(caminho)) return 0;  // evita o aviso "does not exist" no monitor
   File f = LittleFS.open(caminho, FILE_READ);
   const size_t t = f ? f.size() : 0;
   if (f) f.close();
