@@ -66,6 +66,16 @@ inline bool conectar(Stream& serial, bool mostrar = true) {
   serial.println();
   if (!conectado()) {
     serial.println(F("# Wi-Fi indisponivel (nenhuma das redes). Tento de novo na proxima medicao."));
+    // Mostra o que o ESP32 enxerga: se a rede nao aparece, esta longe ou em 5 GHz;
+    // se aparece e mesmo assim nao conecta, a senha (ou o nome) esta diferente.
+    const int16_t total = WiFi.scanNetworks();
+    serial.print(F("# Redes que o ESP32 encontrou (so 2,4 GHz): "));
+    for (int16_t i = 0; i < total; ++i) {
+      serial.print(i ? ", " : "");
+      serial.print(WiFi.SSID(i));
+    }
+    serial.println(total > 0 ? "" : "nenhuma");
+    WiFi.scanDelete();
     return false;
   }
   serial.printf("# Wi-Fi conectado na rede %s (%s)\n", WiFi.SSID().c_str(), WiFi.localIP().toString().c_str());
