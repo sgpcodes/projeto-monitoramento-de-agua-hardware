@@ -54,6 +54,9 @@ inline bool conectar(Stream& serial, bool mostrar = true) {
   if (conectado()) return true;
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);  // se o sinal cair depois, reconecta sozinho
+  // Sem economia de energia no radio: com ela o ESP32 "cochila" entre pacotes e,
+  // principalmente no roteador do celular, os envios falham um sim, outro nao.
+  WiFi.setSleep(false);
   if (mostrar) serial.print(F("# Conectando Wi-Fi..."));
   const uint32_t inicio = millis();
   while (redes().run() != WL_CONNECTED && millis() - inicio < TIMEOUT_MS) {
