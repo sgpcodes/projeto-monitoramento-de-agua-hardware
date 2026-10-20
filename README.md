@@ -78,10 +78,9 @@ Mudou alguma coisa (lanterna, pote, água de referência)? Aperte o botão **BOO
   "medido_em": "2026-10-20T14:02:10-03:00",
   "tipo": "amostra",
   "amostra": "lagoa",
-  "led": "frente", "replica": 1, "ganho": 64, "atime": 100, "astep": 999, "n": 20, "saturado": false,
-  "media":  { "f1_415": 2394.0, "f2_445": 4802.0, "...": "...", "clear": 31200.0, "nir": 1650.0 },
-  "desvio": { "f1_415": 8.1, "f2_445": 11.3, "...": "...", "clear": 40.2, "nir": 6.0 },
-  "turbidez_mv": 4120, "dp_turbidez_mv": 6,
+  "ganho": 64,
+  "saturado": false,
+  "media": { "f1_415": 2394.0, "f2_445": 4802.0, "...": "...", "clear": 31200.0, "nir": 1650.0 },
   "turbidez": { "ntu": 18.4, "tensao_v": 4.12, "classificacao": "LEVEMENTE TURVA" },
   "cores": [
     { "nome": "Violeta",       "comprimento_onda_nm": 415, "valor": 2394,  "porcentagem": 57.0 },
@@ -105,6 +104,7 @@ Mudou alguma coisa (lanterna, pote, água de referência)? Aperte o botão **BOO
 ```
 
 - `tipo`: `branco` (água limpa de referência, cores ≈ 100%) ou `amostra`.
+- `media`: os 10 canais crus do sensor; o dashboard calcula os gráficos a partir deles. `ganho`/`saturado`: configuração e alerta de luz forte demais.
 - `valor`: número captado pelo sensor naquela cor. `porcentagem`: quanto de luz passou comparado à água limpa (100% = igual à água limpa).
 - `turbidez.ntu`: turbidez em NTU, a unidade padrão. Vem `null` se o sensor de turbidez não estiver ligado; nesse caso a `classificacao` é estimada pelo sensor de cor.
 - `contaminacao_pct`: 0 = água limpa, 100 = água podre de referência. Vem `null` até gravar a água suja.

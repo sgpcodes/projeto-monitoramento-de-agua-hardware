@@ -107,16 +107,10 @@ inline String montarJson(const Medicao& m, const char* data) {
   doc["tipo"] = m.tipo;
   doc["amostra"] = m.amostra;
 
-  // Campos que o back-end exige (formato combinado no PDF de comunicacao).
-  doc["led"] = "frente";  // a lanterna atravessa a agua
-  doc["replica"] = 1;
+  // Canais crus (o dashboard calcula os graficos a partir deles), ganho e saturacao.
   doc["ganho"] = m.ganho;
-  doc["atime"] = sensor_config::ATIME;
-  doc["astep"] = sensor_config::ASTEP;
-  doc["n"] = m.cor->leituras;
   doc["saturado"] = m.cor->saturado;
   JsonObject media = doc["media"].to<JsonObject>();
-  JsonObject desvio = doc["desvio"].to<JsonObject>();
   for (uint8_t c = 0; c < sensor_config::CANAIS; ++c) {
     char chave[8];
     if (c < sensor_config::CORES) {
@@ -125,14 +119,6 @@ inline String montarJson(const Medicao& m, const char* data) {
       strcpy(chave, c == sensor_config::CLEAR ? "clear" : "nir");
     }
     media[chave] = serialized(String(m.cor->media[c], 1));
-    desvio[chave] = serialized(String(m.cor->desvio[c], 1));
-  }
-  if (m.turbidez->valido) {
-    doc["turbidez_mv"] = serialized(String(m.turbidez->mediaMv, 0));
-    doc["dp_turbidez_mv"] = serialized(String(m.turbidez->desvioMv, 0));
-  } else {
-    doc["turbidez_mv"] = nullptr;
-    doc["dp_turbidez_mv"] = nullptr;
   }
 
   // Turbidez em NTU (null se o sensor de turbidez nao estiver ligado).
