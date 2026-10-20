@@ -158,15 +158,40 @@ void barra(float fracao) {
   for (int i = 0; i < 20; ++i) Serial.print(i < cheios ? "█" : "░");
 }
 
-// Uma linha so: deu certo ou o motivo do erro.
+// Mensagem das medicoes antigas (guardadas sem internet) que foram reenviadas.
+void imprimirReenvio(const dashboard_api::Reenvio& r) {
+  if (r.enviadas > 0) Serial.printf(" ✓ %u medicoes guardadas tambem foram enviadas.\n", r.enviadas);
+  if (r.recusadas > 0) Serial.printf(" ✗ %u medicoes guardadas estavam com defeito e foram descartadas.\n", r.recusadas);
+  if (r.esperando > 0) {
+    Serial.printf(" ⏳ Ainda faltam %u medicoes guardadas; envio nas proximas.\n", r.esperando);
+  } else {
+    Serial.println(F(" Tudo certo, nada pendente."));
+  }
+}
+
+// Resultado do envio em palavras simples.
 void imprimirEnvio(dashboard_api::Envio envio) {
-  const char* erro = dashboard_api::ultimoErro().c_str();
+  const char* motivo = dashboard_api::ultimoErro().c_str();
   switch (envio) {
-    case dashboard_api::Envio::ENVIADO: Serial.println(F(" ✓ Enviado com sucesso")); break;
-    case dashboard_api::Envio::GUARDADO: Serial.printf(" ✗ Erro: %s. Guardado, sera reenviado.\n", erro); break;
-    case dashboard_api::Envio::FILA_CHEIA: Serial.printf(" ✗ Erro: %s. Fila cheia, ficou so no historico.\n", erro); break;
-    case dashboard_api::Envio::RECUSADO: Serial.printf(" ✗ Erro: o servidor recusou (%s)\n", erro); break;
-    case dashboard_api::Envio::SEM_DATA: Serial.println(F(" ✗ Erro: sem a hora da internet. Ficou so no historico.")); break;
+    case dashboard_api::Envio::ENVIADO:
+      if (!dashboard_api::temPendentes()) {
+        Serial.println(F(" ✓ Enviado com sucesso. Tudo certo, nada pendente."));
+      } else {
+        Serial.println(F(" ✓ Enviado com sucesso. Enviando tambem as medicoes guardadas..."));
+        imprimirReenvio(dashboard_api::reenviarPendentes());
+      }
+      break;
+    case dashboard_api::Envio::GUARDADO:
+      Serial.printf(" ✗ Nao enviado: %s.\n   A medicao ficou guardada e sera enviada sozinha depois.\n", motivo);
+      break;
+    case dashboard_api::Envio::FILA_CHEIA:
+      Serial.printf(" ✗ Nao enviado: %s.\n   A memoria de espera encheu: a medicao ficou so no historico da placa.\n", motivo);
+      break;
+    case dashboard_api::Envio::RECUSADO: Serial.printf(" ✗ Nao enviado: %s.\n", motivo); break;
+    case dashboard_api::Envio::SEM_DATA:
+      Serial.println(F(" ✗ Nao enviado: o relogio ainda nao pegou a hora da internet.\n"
+                       "   A medicao ficou no historico da placa."));
+      break;
   }
 }
 
@@ -233,8 +258,6 @@ void relatarEEnviar(const char* tipo, const char* nome, const char* titulo, cons
     Serial.printf(" Proxima medicao: %s\n", hora);
   }
   linha();
-  // Internet ok: aproveita e manda as medicoes antigas guardadas (depois do relatorio).
-  if (envio == dashboard_api::Envio::ENVIADO) dashboard_api::reenviarPendentes(Serial);
 }
 
 // Guarda a medicao como padrao de agua limpa, se a luz estiver boa.
@@ -533,6 +556,9 @@ void loop() {
   // Leituras guardadas sem internet: tenta de novo de tempos em tempos.
   if (millis() - estado.reenvioMs >= REENVIO_MS) {
     estado.reenvioMs = millis();
-    dashboard_api::reenviarPendentes(Serial);
+    if (dashboard_api::temPendentes() && wifi_config::conectado()) {
+      Serial.println(F("\n# Enviando as medicoes guardadas sem internet..."));
+      imprimirReenvio(dashboard_api::reenviarPendentes());
+    }
   }
 }

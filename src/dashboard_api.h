@@ -175,7 +175,7 @@ inline String& ultimoErro() {
 // Codigo HTTP da resposta, ou negativo se nem chegou na API.
 inline int post(const String& json) {
   if (!wifi_config::conectado()) {
-    ultimoErro() = "sem Wi-Fi";
+    ultimoErro() = "sem internet (Wi-Fi desconectado)";
     return -1;  // vai para a fila
   }
   const String url = String(secrets::API_URL) + "/api/leituras/";
@@ -183,15 +183,28 @@ inline int post(const String& json) {
   WiFiClient simples;       // http:// (API rodando num computador, para testar)
   seguro.setInsecure();     // criptografa, mas nao confere o certificado
   HTTPClient http;
-  if (!(url.startsWith("https://") ? http.begin(seguro, url) : http.begin(simples, url))) return -1;
+  if (!(url.startsWith("https://") ? http.begin(seguro, url) : http.begin(simples, url))) {
+    ultimoErro() = "endereco da API invalido (confira o secrets.h)";
+    return -1;
+  }
   http.setTimeout(TIMEOUT_MS);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-API-Key", secrets::API_KEY);
   const int codigo = http.POST(json);
+  // Motivo da falha em palavras simples.
   if (codigo < 0) {
-    ultimoErro() = "o servidor nao respondeu (" + HTTPClient::errorToString(codigo) + ")";
+    ultimoErro() = "o dashboard nao respondeu (pode estar ligando, tenta de novo depois)";
+  } else if (codigo == 401 || codigo == 403) {
+    ultimoErro() = "a chave da API esta errada (confira o secrets.h e o Render)";
+  } else if (codigo >= 500) {
+    ultimoErro() = "o dashboard esta com problema no momento";
   } else if (codigo >= 300) {
-    ultimoErro() = "HTTP " + String(codigo) + ": " + http.getString().substring(0, 200);
+    // A API explica o motivo em {"erro": "..."}; mostra so a frase.
+    const String corpo = http.getString();
+    JsonDocument resposta;
+    const bool lido = !deserializeJson(resposta, corpo);
+    const char* motivo = lido ? (resposta["erro"] | resposta["detail"] | "") : "";
+    ultimoErro() = String("o dashboard recusou os dados: ") + (*motivo ? motivo : corpo.substring(0, 150).c_str());
   }
   http.end();
   return codigo;
@@ -199,14 +212,22 @@ inline int post(const String& json) {
 
 inline bool tentarDeNovo(int codigo) { return codigo < 0 || codigo >= 500; }
 
+inline bool temPendentes() { return tamanho(PENDENTES) > 0; }
+
+struct Reenvio {
+  uint16_t enviadas = 0;
+  uint16_t recusadas = 0;
+  uint16_t esperando = 0;
+};
+
 // Manda ate 10 medicoes guardadas sem internet. Para na primeira falha de rede;
 // as outras ficam para a proxima vez. Linhas recusadas (4xx) sao descartadas.
-inline void reenviarPendentes(Stream& serial) {
-  if (tamanho(PENDENTES) == 0 || !wifi_config::conectado()) return;
+inline Reenvio reenviarPendentes() {
+  Reenvio r;
+  if (!temPendentes() || !wifi_config::conectado()) return r;
   static char linha[MAX_LINHA];  // tamanho fixo: arquivo estragado nao trava nem estoura a memoria
   File f = LittleFS.open(PENDENTES, FILE_READ);
   String restantes;
-  uint16_t enviadas = 0, recusadas = 0, esperando = 0;
   uint8_t tentativas = 0;
   bool falhou = false;
   while (f.available()) {
@@ -221,7 +242,7 @@ inline void reenviarPendentes(Stream& serial) {
     if (falhou || tentativas >= REENVIOS_POR_VEZ) {
       if (restantes.length() + json.length() < LIMITE_RESTANTES) {
         restantes += json + '\n';
-        ++esperando;
+        ++r.esperando;
       }
       continue;
     }
@@ -229,12 +250,12 @@ inline void reenviarPendentes(Stream& serial) {
     const int codigo = post(json);
     if (tentarDeNovo(codigo)) {
       restantes += json + '\n';
-      ++esperando;
+      ++r.esperando;
       falhou = true;
     } else if (codigo < 300) {
-      ++enviadas;
+      ++r.enviadas;
     } else {
-      ++recusadas;
+      ++r.recusadas;
     }
   }
   f.close();
@@ -244,7 +265,7 @@ inline void reenviarPendentes(Stream& serial) {
     novo.print(restantes);
     novo.close();
   }
-  serial.printf("# Fila sem internet: %u reenviadas, %u recusadas, %u esperando.\n", enviadas, recusadas, esperando);
+  return r;
 }
 
 inline Envio enviar(const Medicao& m) {
