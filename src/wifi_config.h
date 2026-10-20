@@ -1,7 +1,7 @@
 // =============================================================================
 // wifi_config.h — conexao Wi-Fi e hora certa pela internet
 // -----------------------------------------------------------------------------
-// Nome e senha das duas redes ficam em secrets.h. O ESP32 so conecta em Wi-Fi 2,4 GHz.
+// Nome e senha das tres redes ficam em secrets.h. O ESP32 so conecta em Wi-Fi 2,4 GHz.
 // O ESP32 nao tem relogio com bateria: ao ligar, ele pega a hora em servidores
 // NTP na internet (horario de Brasilia) e dai o relogio interno anda sozinho.
 // =============================================================================
@@ -21,13 +21,14 @@ namespace wifi_config {
 constexpr uint32_t TIMEOUT_MS = 20000;      // desiste de conectar depois de 20 s
 constexpr char FUSO_BRASILIA[] = "<-03>3";  // UTC-3, sem horario de verao
 
-// As duas redes do secrets.h; o ESP32 escolhe a que estiver com sinal.
+// As tres redes do secrets.h; o ESP32 escolhe a que estiver com sinal.
 inline WiFiMulti& redes() {
   static WiFiMulti multi;
   static bool cadastradas = false;
   if (!cadastradas) {
     multi.addAP(secrets::WIFI_SSID, secrets::WIFI_PASSWORD);
     multi.addAP(secrets::WIFI_SSID_2, secrets::WIFI_PASSWORD_2);
+    multi.addAP(secrets::WIFI_SSID_3, secrets::WIFI_PASSWORD_3);
     cadastradas = true;
   }
   return multi;
@@ -46,7 +47,7 @@ inline bool agora(char* destino, size_t tamanho, const char* formato, uint32_t e
   return true;
 }
 
-// Conecta na rede disponivel (das duas do secrets.h) e espera a hora chegar.
+// Conecta na rede disponivel (das tres do secrets.h) e espera a hora chegar.
 // mostrar = false: tenta em silencio (antes de cada envio).
 inline bool conectar(Stream& serial, bool mostrar = true) {
   if (conectado()) return true;
