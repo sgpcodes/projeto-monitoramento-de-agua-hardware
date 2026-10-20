@@ -20,6 +20,7 @@
 #include <HTTPClient.h>
 #include <LittleFS.h>
 #include <WiFiClientSecure.h>
+#include <esp_task_wdt.h>
 
 #include "secrets.h"
 #include "sensor_config.h"
@@ -213,7 +214,10 @@ inline void reenviarPendentes(Stream& serial) {
   uint16_t enviadas = 0;
   bool falhou = false;
   while (f.available()) {
+    esp_task_wdt_reset();  // cada envio pode levar ate 30 s
+    const size_t antes = f.position();
     String linha = f.readStringUntil('\n');
+    if (f.position() == antes) break;  // arquivo corrompido nao avanca: descarta o resto
     linha.trim();
     if (linha.isEmpty()) continue;
     if (falhou || tentativas >= REENVIOS_POR_VEZ) {

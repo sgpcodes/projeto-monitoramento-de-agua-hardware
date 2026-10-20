@@ -22,6 +22,7 @@
 
 #include <Arduino.h>
 #include <LittleFS.h>
+#include <esp_task_wdt.h>
 
 #include "dashboard_api.h"
 #include "sensor_config.h"
@@ -35,6 +36,7 @@ using sensor_config::CORES;
 
 constexpr uint32_t INTERVALO_MS = 60UL * 1000UL;       // medicao automatica: 1 minuto
 constexpr uint32_t REENVIO_MS = 5UL * 60UL * 1000UL;   // tenta a fila a cada 5 min
+constexpr uint32_t WATCHDOG_S = 180;                   // travou 3 min? reinicia sozinho
 constexpr uint8_t REPLICAS = 3;                        // medicoes ao gravar limpa/suja
 constexpr char ARQUIVO_REFERENCIA[] = "/referencia.bin";
 // Botao BOOT da placa. Para um botao externo: ligue entre GPIO 4 e GND e mude para 4.
@@ -273,6 +275,7 @@ String lerLinha(uint32_t tempoMs) {
   const uint32_t inicio = millis();
   String texto;
   while (tempoMs == 0 || millis() - inicio < tempoMs) {
+    esp_task_wdt_reset();  // esperando a pessoa: nao e travamento
     if (botaoApertado()) return "";
     while (Serial.available()) {
       const char ch = Serial.read();
@@ -474,6 +477,8 @@ void aoVivo() {
 void setup() {
   Serial.begin(115200);
   pinMode(PINO_BOTAO, INPUT_PULLUP);
+  esp_task_wdt_init(WATCHDOG_S, true);  // vigia: se o programa travar, a placa reinicia
+  esp_task_wdt_add(nullptr);
   Serial.println(F("\n# Ligacoes: AS7341 VIN=3V3 SDA=21 SCL=22 · Turbidez VCC=VIN(5V) OUT=divisor->GPIO 34"));
   turbidez_config::iniciar();
   if (!sensor_config::iniciar(as7341)) {
@@ -498,6 +503,7 @@ void setup() {
 }
 
 void loop() {
+  esp_task_wdt_reset();  // "estou vivo"
   lerTeclado();
   if (botaoApertado()) menuGravar();
 
