@@ -44,6 +44,7 @@ enum class Envio { ENVIADO, GUARDADO, FILA_CHEIA, RECUSADO, SEM_DATA };
 struct Diagnostico {
   float porcentagem[sensor_config::CORES];  // % de luz que passou em cada cor
   const char* turbidez;                     // LIMPA | LEVEMENTE TURVA | TURVA | MUITO TURVA
+  float luzBloqueadaPct;                    // turbidez pelo AS7341 (590-630 nm)
   const char* algas;                        // NAO DETECTADAS | SINAL FRACO | PRESENTES
   const char* cor;                          // NORMAL | LEVEMENTE AMARELADA | COR DE CHA
   bool temContaminacao;                     // so depois do ensaio (agua podre medida)
@@ -134,6 +135,7 @@ inline String montarJson(const Medicao& m, const char* data) {
     turbidez["ntu"] = nullptr;
     turbidez["tensao_v"] = nullptr;
   }
+  turbidez["luz_bloqueada_pct"] = serialized(String(d.luzBloqueadaPct, 1));  // pelo AS7341
   turbidez["classificacao"] = d.turbidez;
 
   // As 8 cores: nome, comprimento de onda, numero captado e % de luz que passou.

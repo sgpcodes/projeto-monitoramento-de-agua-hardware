@@ -85,7 +85,7 @@ Mudou alguma coisa (lanterna, pote, água de referência)? Aperte o botão **BOO
   "ganho": 64,
   "saturado": false,
   "media": { "f1_415": 2394.0, "f2_445": 4802.0, "...": "...", "clear": 31200.0, "nir": 1650.0 },
-  "turbidez": { "ntu": 18.4, "tensao_v": 4.12, "classificacao": "LEVEMENTE TURVA" },
+  "turbidez": { "ntu": 18.4, "tensao_v": 4.12, "luz_bloqueada_pct": 12.5, "classificacao": "LEVEMENTE TURVA" },
   "cores": [
     { "nome": "Violeta",       "comprimento_onda_nm": 415, "valor": 2394,  "porcentagem": 57.0 },
     { "nome": "Azul",          "comprimento_onda_nm": 445, "valor": 4802,  "porcentagem": 49.0 },
@@ -110,6 +110,7 @@ Mudou alguma coisa (lanterna, pote, água de referência)? Aperte o botão **BOO
 - `tipo`: `branco` (água limpa de referência, cores ≈ 100%) ou `amostra`.
 - `media`: os 10 canais crus do sensor; o dashboard calcula os gráficos a partir deles. `ganho`/`saturado`: configuração e alerta de luz forte demais.
 - `valor`: número captado pelo sensor naquela cor. `porcentagem`: quanto de luz passou comparado à água limpa (100% = igual à água limpa).
+- `turbidez.luz_bloqueada_pct`: turbidez pelo sensor de cor (AS7341): % da luz bloqueada em 590–630 nm, faixa onde a cor da água e a clorofila quase não absorvem (mesma ideia da ISO 7027). Vem sempre.
 - `turbidez.ntu`: turbidez em NTU, a unidade padrão. Vem `null` se o sensor de turbidez não estiver ligado; nesse caso a `classificacao` é estimada pelo sensor de cor.
 - `contaminacao_pct`: 0 = água limpa, 100 = água podre de referência. Vem `null` até gravar a água suja.
 

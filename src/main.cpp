@@ -14,7 +14,9 @@
 //
 // Contas, com o padrao de agua limpa como 100% de luz:
 //   % de luz que passou = amostra / padrao      absorbancia A = -log10(fracao)
-//   turbidez = NTU do sensor de turbidez (ou, sem ele, 1 - luz no amarelo 590 nm)
+//   turbidez = NTU do sensor de turbidez; pelo AS7341 = luz bloqueada em 590-630 nm
+//   (faixa onde a cor da agua e a clorofila quase nao absorvem: sobra o efeito das
+//   particulas, mesma ideia da norma ISO 7027)
 //   algas = A680 - A590      cor (materia organica) = A415 - A555
 //   contaminacao = (A . A_podre) / (A_podre . A_podre)   0% = limpa, 100% = podre
 // As palavras (LIMPA, TURVA...) ajudam a leitura; nao sao laudo de laboratorio.
@@ -90,7 +92,7 @@ bool temPadrao() { return estado.ref.temPadrao && estado.ref.ganho == estado.gan
 struct Indices {
   float luz[CORES];     // fracao de luz que passou (1 = 100%)
   float absorb[CORES];  // absorbancia
-  float turbidezCor;    // 0 a 1, usado so se o sensor de turbidez nao estiver ligado
+  float turbidezCor;    // 0 a 1: fracao da luz bloqueada pelas particulas (AS7341)
   float algas, cor;
   bool temEscala = false;
   float contaminacao = 0;  // 0 = limpa, 1 = igual a podre
@@ -103,7 +105,8 @@ Indices calcular(const sensor_config::Resultado& r) {
     x.luz[c] = ref.padrao[c] > 0 ? constrain(r.media[c] / ref.padrao[c], 0.0f, 1.5f) : 0;
     x.absorb[c] = -log10(max(x.luz[c], 0.001f));
   }
-  x.turbidezCor = 1.0f - x.luz[5];      // amarelo 590 nm: pouco afetado por algas e cor
+  // Media (geometrica) do amarelo 590 nm e do laranja 630 nm.
+  x.turbidezCor = constrain(1.0f - sqrt(x.luz[5] * x.luz[6]), 0.0f, 1.0f);
   x.algas = x.absorb[7] - x.absorb[5];  // 680 - 590 (clorofila)
   x.cor = x.absorb[0] - x.absorb[4];    // 415 - 555 (materia organica)
 
@@ -137,6 +140,7 @@ dashboard_api::Diagnostico diagnosticar(const Indices& x, const turbidez_config:
   dashboard_api::Diagnostico d;
   for (uint8_t c = 0; c < CORES; ++c) d.porcentagem[c] = x.luz[c] * 100.0f;
   d.turbidez = palavraTurbidez(x, t);
+  d.luzBloqueadaPct = x.turbidezCor * 100.0f;
   d.algas = palavraAlgas(x.algas);
   d.cor = palavraCor(x.cor);
   d.temContaminacao = x.temEscala;
@@ -211,8 +215,9 @@ void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, co
   }
   if (t.temNtu()) {
     Serial.printf(" Turbidez  %s (%.0f NTU, sensor em %.2f V)\n", d.turbidez, t.ntu, t.mediaMv / 1000.0f);
+    Serial.printf("           sensor de cor: %.0f%% da luz bloqueada\n", x.turbidezCor * 100.0f);
   } else {
-    Serial.printf(" Turbidez  %s (pelo sensor de cor)\n", d.turbidez);
+    Serial.printf(" Turbidez  %s (sensor de cor: %.0f%% da luz bloqueada)\n", d.turbidez, x.turbidezCor * 100.0f);
   }
   Serial.printf(" Algas     %s\n Cor       %s\n\n", d.algas, d.cor);
 
