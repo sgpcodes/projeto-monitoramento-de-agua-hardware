@@ -95,6 +95,7 @@ struct Indices {
   float turbidezCor;    // 0 a 1: fracao da luz bloqueada pelas particulas (AS7341)
   float algas, cor;
   bool temEscala = false;
+  bool poucaLuz = false;  // sinal fraco demais: cor e turbidez pelo AS7341 nao valem
   float contaminacao = 0;  // 0 = limpa, 1 = igual a podre
 };
 
@@ -109,6 +110,9 @@ Indices calcular(const sensor_config::Resultado& r) {
   x.turbidezCor = constrain(1.0f - sqrt(x.luz[5] * x.luz[6]), 0.0f, 1.0f);
   x.algas = x.absorb[7] - x.absorb[5];  // 680 - 590 (clorofila)
   x.cor = x.absorb[0] - x.absorb[4];    // 415 - 555 (materia organica)
+  // Com menos de 1000 contagens no canal CLEAR o sensor mede ruido: tudo parece
+  // "agua turvissima". Melhor dizer que nao deu para medir.
+  x.poucaLuz = r.media[sensor_config::CLEAR] < sensor_config::LUZ_FRACA;
 
   // Escala limpa -> podre (Beer-Lambert: x% de agua podre gera x% da absorbancia dela).
   if (ref.temPodre) {
@@ -125,6 +129,7 @@ Indices calcular(const sensor_config::Resultado& r) {
 
 const char* palavraTurbidez(const Indices& x, const turbidez_config::Resultado& t) {
   if (t.temNtu()) return turbidez_config::classificar(t.ntu);
+  if (x.poucaLuz) return "SEM LEITURA";
   const float v = x.turbidezCor;
   return v < 0.05f ? "LIMPA" : v < 0.15f ? "LEVEMENTE TURVA" : v < 0.35f ? "TURVA" : "MUITO TURVA";
 }
@@ -140,7 +145,7 @@ dashboard_api::Diagnostico diagnosticar(const Indices& x, const turbidez_config:
   dashboard_api::Diagnostico d;
   for (uint8_t c = 0; c < CORES; ++c) d.porcentagem[c] = x.luz[c] * 100.0f;
   d.turbidez = palavraTurbidez(x, t);
-  d.luzBloqueadaPct = x.turbidezCor * 100.0f;
+  d.luzBloqueadaPct = x.poucaLuz ? NAN : x.turbidezCor * 100.0f;  // NAN vira null no JSON
   d.algas = palavraAlgas(x.algas);
   d.cor = palavraCor(x.cor);
   d.temContaminacao = x.temEscala;
@@ -217,7 +222,11 @@ void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, co
     Serial.printf(" Turbidez  %s (%.0f NTU, sensor em %.2f V)\n", d.turbidez, t.ntu, t.mediaMv / 1000.0f);
     Serial.printf("           sensor de cor: %.0f%% da luz bloqueada\n", x.turbidezCor * 100.0f);
   } else {
-    Serial.printf(" Turbidez  %s (sensor de cor: %.0f%% da luz bloqueada)\n", d.turbidez, x.turbidezCor * 100.0f);
+    if (x.poucaLuz) {
+      Serial.println(F(" Turbidez  SEM LEITURA (pouca luz no sensor de cor)"));
+    } else {
+      Serial.printf(" Turbidez  %s (sensor de cor: %.0f%% da luz bloqueada)\n", d.turbidez, x.turbidezCor * 100.0f);
+    }
   }
   Serial.printf(" Algas     %s\n Cor       %s\n\n", d.algas, d.cor);
 
@@ -228,6 +237,11 @@ void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, co
     Serial.printf(" %3.0f%%\n", d.porcentagem[c]);
   }
   if (r.saturado) Serial.println(F(" ⚠ Luz forte demais (sensor estourou): diminua o ganho, ex.: g 16"));
+  if (x.poucaLuz) {
+    Serial.printf(" ⚠ POUCA LUZ NO SENSOR (total %.0f, o normal sao milhares): cor, algas e turbidez nao valem.\n"
+                  "   Confira se a lanterna esta acesa e alinhada (comando v) ou aumente o ganho (ex.: g 128).\n",
+                  r.media[sensor_config::CLEAR]);
+  }
   if (t.semSinal()) Serial.println(F(" ⚠ Sensor de turbidez SEM SINAL: confira os fios e a chave D/A em \"A\"."));
   if (t.noMaximo()) {
     Serial.printf(" ⚠ Sensor de turbidez travado no maximo (%.2f V): turbidez estimada pelo sensor de cor.\n"

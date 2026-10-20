@@ -137,7 +137,11 @@ inline String montarJson(const Medicao& m, const char* data) {
     turbidez["ntu"] = nullptr;
     turbidez["tensao_v"] = nullptr;
   }
-  turbidez["luz_bloqueada_pct"] = serialized(String(d.luzBloqueadaPct, 1));  // pelo AS7341
+  if (isnan(d.luzBloqueadaPct)) {
+    turbidez["luz_bloqueada_pct"] = nullptr;  // pouca luz no sensor: nao deu para medir
+  } else {
+    turbidez["luz_bloqueada_pct"] = serialized(String(d.luzBloqueadaPct, 1));  // pelo AS7341
+  }
   turbidez["classificacao"] = d.turbidez;
 
   // As 8 cores: nome, comprimento de onda, numero captado e % de luz que passou.
