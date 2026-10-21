@@ -257,8 +257,14 @@ void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, co
     Serial.printf(" ⚠ Sensor de turbidez INSTAVEL (variou %.0f mV na medicao): bolhas na sonda ou mau contato.\n", t.desvioMv);
   }
   if (t.estado() == turbidez_config::Estado::FORA_DA_CURVA) {
-    Serial.printf(" ⚠ Tensao do sensor de turbidez (%.2f V) fora da faixa da curva (%.1f a %.1f V): sem estimativa de NTU.\n",
-                  t.mediaMv / 1000.0f, turbidez_config::CALIBRACAO.minV, turbidez_config::CALIBRACAO.maxV);
+    // Nao e defeito: o valor passou do inicio ou do fim da curva (2,5 V a 4,2 V).
+    if (turbidez_config::tensaoCorrigidaV(t.mediaMv) > turbidez_config::CALIBRACAO.maxV) {
+      Serial.printf(" Sensor de turbidez acima de %.1f V: agua mais clara que o inicio da curva (<= ~1 NTU, experimental).\n",
+                    turbidez_config::CALIBRACAO.maxV);
+    } else {
+      Serial.printf(" Sensor de turbidez abaixo de %.1f V: alem do fim da curva (>= ~3000 NTU, experimental).\n",
+                    turbidez_config::CALIBRACAO.minV);
+    }
   }
   if (t.noMaximo()) {
     Serial.printf(" ⚠ Sensor de turbidez travado no maximo (%.2f V): turbidez estimada pelo sensor de cor.\n"

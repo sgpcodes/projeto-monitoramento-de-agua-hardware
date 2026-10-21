@@ -149,8 +149,17 @@ inline String montarJson(const Medicao& m, const char* data) {
   }
   if (t.temNtu()) {
     turbidez["ntu_experimental"] = serialized(String(t.ntu, 1));
+    turbidez["ntu_limite"] = nullptr;
+  } else if (t.estado() == turbidez_config::Estado::FORA_DA_CURVA) {
+    // Passou do inicio (agua mais clara) ou do fim da curva: manda o valor do limite.
+    const bool maisClara = turbidez_config::tensaoCorrigidaV(t.mediaMv) > turbidez_config::CALIBRACAO.maxV;
+    const float limiteV = maisClara ? turbidez_config::CALIBRACAO.maxV : turbidez_config::CALIBRACAO.minV;
+    const auto& c = turbidez_config::CALIBRACAO;  // curva direto no ponto-limite (nunca NAN)
+    turbidez["ntu_experimental"] = serialized(String(max(0.0f, c.a * limiteV * limiteV + c.b * limiteV + c.c), 1));
+    turbidez["ntu_limite"] = maisClara ? "<=" : ">=";
   } else {
     turbidez["ntu_experimental"] = nullptr;
+    turbidez["ntu_limite"] = nullptr;
   }
   if (t.temNtuValidado()) {
     turbidez["ntu"] = serialized(String(t.ntu, 1));
