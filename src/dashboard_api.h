@@ -35,6 +35,7 @@ constexpr uint16_t TIMEOUT_MS = 30000;               // Render gratis pode levar
 constexpr size_t LIMITE_PENDENTES = 300UL * 1024UL;  // ~500 medicoes esperando envio
 constexpr size_t LIMITE_HISTORICO = 900UL * 1024UL;  // ~6.500 medicoes = ~4,5 dias
 constexpr uint8_t REENVIOS_POR_VEZ = 10;
+constexpr char FIRMWARE_VERSAO[] = "2026.10.21-turbidez-v2";  // vai no JSON (firmware_version)
 constexpr size_t MAX_LINHA = 2048;                   // uma medicao em JSON tem ~1,3 KB
 constexpr size_t LIMITE_RESTANTES = 60UL * 1024UL;  // o que cabe na RAM ao reescrever a fila
 
@@ -109,6 +110,7 @@ inline String montarJson(const Medicao& m, const char* data) {
   JsonDocument doc;
   doc["data_coleta"] = data;
   doc["medido_em"] = medidoEm;  // hora real da medicao
+  doc["firmware_version"] = FIRMWARE_VERSAO;
   doc["tipo"] = m.tipo;
   doc["amostra"] = m.amostra;
 
@@ -128,14 +130,32 @@ inline String montarJson(const Medicao& m, const char* data) {
     desvio[chave] = serialized(String(m.cor->desvio[c], 1));
   }
 
-  // Turbidez em NTU (null se o sensor de turbidez nao estiver ligado).
+  // Sensor de turbidez: dados crus sempre (quando ligado) + estado + calibracao.
+  //   ntu              = NTU VALIDADO (null enquanto a calibracao nao for validada)
+  //   ntu_experimental = estimativa pela curva do fabricante (nao validada)
+  const turbidez_config::Resultado& t = *m.turbidez;
   JsonObject turbidez = doc["turbidez"].to<JsonObject>();
-  if (m.turbidez->temNtu()) {
-    turbidez["ntu"] = serialized(String(m.turbidez->ntu, 1));
-    turbidez["tensao_v"] = serialized(String(m.turbidez->mediaMv / 1000.0f, 2));
+  turbidez["status"] = turbidez_config::nomeEstado(t.estado());
+  turbidez["calibracao_id"] = turbidez_config::CALIBRACAO.id;
+  turbidez["calibracao_status"] = turbidez_config::CALIBRACAO.validada ? "validada" : "pendente";
+  if (t.valido) {
+    turbidez["adc_raw"] = serialized(String(t.adcBruto, 0));
+    turbidez["tensao_v"] = serialized(String(t.mediaMv / 1000.0f, 3));
+    turbidez["desvio_mv"] = serialized(String(t.desvioMv, 0));
+  } else {
+    turbidez["adc_raw"] = nullptr;
+    turbidez["tensao_v"] = nullptr;
+    turbidez["desvio_mv"] = nullptr;
+  }
+  if (t.temNtu()) {
+    turbidez["ntu_experimental"] = serialized(String(t.ntu, 1));
+  } else {
+    turbidez["ntu_experimental"] = nullptr;
+  }
+  if (t.temNtuValidado()) {
+    turbidez["ntu"] = serialized(String(t.ntu, 1));
   } else {
     turbidez["ntu"] = nullptr;
-    turbidez["tensao_v"] = nullptr;
   }
   if (isnan(d.luzBloqueadaPct)) {
     turbidez["luz_bloqueada_pct"] = nullptr;  // pouca luz no sensor: nao deu para medir

@@ -128,7 +128,8 @@ Indices calcular(const sensor_config::Resultado& r) {
 }
 
 const char* palavraTurbidez(const Indices& x, const turbidez_config::Resultado& t) {
-  if (t.temNtu()) return turbidez_config::classificar(t.ntu);
+  // Palavra pela lei (NTU) so com calibracao validada; senao, pelo sensor de cor.
+  if (t.temNtuValidado()) return turbidez_config::classificar(t.ntu);
   if (x.poucaLuz) return "SEM LEITURA";
   const float v = x.turbidezCor;
   return v < 0.05f ? "LIMPA" : v < 0.15f ? "LEVEMENTE TURVA" : v < 0.35f ? "TURVA" : "MUITO TURVA";
@@ -221,15 +222,21 @@ void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, co
     barra(x.contaminacao);
     Serial.println(F(" SUJA\n"));
   }
-  if (t.temNtu()) {
+  if (t.temNtuValidado()) {
     Serial.printf(" Turbidez  %s (%.0f NTU, sensor em %.2f V)\n", d.turbidez, t.ntu, t.mediaMv / 1000.0f);
-    Serial.printf("           sensor de cor: %.0f%% da luz bloqueada\n", x.turbidezCor * 100.0f);
+  } else if (x.poucaLuz) {
+    Serial.println(F(" Turbidez  SEM LEITURA (pouca luz no sensor de cor)"));
   } else {
-    if (x.poucaLuz) {
-      Serial.println(F(" Turbidez  SEM LEITURA (pouca luz no sensor de cor)"));
-    } else {
-      Serial.printf(" Turbidez  %s (sensor de cor: %.0f%% da luz bloqueada)\n", d.turbidez, x.turbidezCor * 100.0f);
+    Serial.printf(" Turbidez  %s (sensor de cor: %.0f%% da luz bloqueada)\n", d.turbidez, x.turbidezCor * 100.0f);
+  }
+  // Sensor de turbidez: tensao e ADC crus sempre; NTU so como estimativa experimental.
+  if (t.valido) {
+    Serial.printf(" Sensor de turbidez  %.2f V (ADC %.0f, variacao %.0f mV) · %s", t.mediaMv / 1000.0f, t.adcBruto,
+                  t.desvioMv, turbidez_config::nomeEstado(t.estado()));
+    if (t.temNtu() && !turbidez_config::CALIBRACAO.validada) {
+      Serial.printf(" · ~%.0f NTU experimental (calibracao pendente)", t.ntu);
     }
+    Serial.println();
   }
   Serial.printf(" Algas     %s\n Cor       %s\n\n", d.algas, d.cor);
 
@@ -246,6 +253,13 @@ void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, co
                   r.media[sensor_config::CLEAR]);
   }
   if (t.semSinal()) Serial.println(F(" ⚠ Sensor de turbidez SEM SINAL: confira os fios e a chave D/A em \"A\"."));
+  if (t.estado() == turbidez_config::Estado::INSTAVEL) {
+    Serial.printf(" ⚠ Sensor de turbidez INSTAVEL (variou %.0f mV na medicao): bolhas na sonda ou mau contato.\n", t.desvioMv);
+  }
+  if (t.estado() == turbidez_config::Estado::FORA_DA_CURVA) {
+    Serial.printf(" ⚠ Tensao do sensor de turbidez (%.2f V) fora da faixa da curva (%.1f a %.1f V): sem estimativa de NTU.\n",
+                  t.mediaMv / 1000.0f, turbidez_config::CALIBRACAO.minV, turbidez_config::CALIBRACAO.maxV);
+  }
   if (t.noMaximo()) {
     Serial.printf(" ⚠ Sensor de turbidez travado no maximo (%.2f V): turbidez estimada pelo sensor de cor.\n"
                   "   Confira a chave D/A em \"A\" e os resistores do divisor.\n", t.mediaMv / 1000.0f);
@@ -390,6 +404,8 @@ bool passo(const char* cabecalho, const char* instrucao, sensor_config::Resultad
     r.leituras += ri.leituras;
     t.valido = ti.valido;
     t.mediaMv += ti.mediaMv / REPLICAS;
+    t.adcBruto += ti.adcBruto / REPLICAS;
+    t.desvioMv = max(t.desvioMv, ti.desvioMv);  // o pior dos 3: instabilidade nao some na media
   }
   t.ntu = turbidez_config::ntuDaTensao(t.mediaMv);
   return true;
@@ -534,8 +550,11 @@ void aoVivo() {
     saturado = saturado || v[c] >= sensor_config::SATURACAO;
   }
   if (turbidez_config::INSTALADO) {
-    const float mv = turbidez_config::lerMv();
-    Serial.printf("Turbidez %.1f NTU (%.2f V)", turbidez_config::ntuDaTensao(mv), mv / 1000.0f);
+    float bruto = 0;
+    const float mv = turbidez_config::lerMv(&bruto);
+    const float ntu = turbidez_config::ntuDaTensao(mv);
+    Serial.printf("Turbidez %.2f V (ADC %.0f)", mv / 1000.0f, bruto);
+    if (!isnan(ntu)) Serial.printf(" ~%.0f NTU experimental", ntu);
   }
   Serial.println(saturado ? F("  <- LUZ FORTE DEMAIS") : F(""));
 }

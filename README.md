@@ -43,7 +43,7 @@ constexpr char API_KEY[] = "CHAVE_COMBINADA_COM_O_BACK_END";
 
 Chave D/A da plaquinha de turbidez em **A**. Se o sensor de turbidez não estiver ligado, use `INSTALADO = false` em `turbidez_config.h`.
 
-**Turbidez em NTU:** a tensão do sensor vira NTU pela curva do fabricante (válida de 2,5 V ≈ 3000 NTU a 4,2 V ≈ 0 NTU). Classificação: até 5 NTU = limpa (limite da água potável, Portaria GM/MS 888/2021); até 40 = levemente turva; até 100 = turva (limites das classes de água doce da CONAMA 357/2005); acima de 100 = muito turva. **Alimentação:** meça com o multímetro a tensão entre VIN e GND (com tudo ligado) e coloque em `ALIMENTACAO_V` em `turbidez_config.h`; pela USB costuma dar 4,5–4,8 V e a curva é para 5 V. **Calibração:** com água limpa, o modo ao vivo (`v`) deve mostrar perto de 0 NTU. Se mostrar mais, aumente `AJUSTE_V` em `turbidez_config.h` (ex.: `0.15`).
+**Turbidez (sensor analógico):** o ESP32 lê o ADC (GPIO 34, 12 bits, atenuação 11 dB, `analogReadMilliVolts`), desfaz o divisor e manda a **tensão e o ADC crus**. A conversão para NTU usa a curva publicada pelo fabricante (DFRobot SEN0189) e está **marcada como experimental**: o modelo do sensor não foi confirmado e a curva nunca foi comparada com padrões de turbidez. Por isso `turbidez.ntu` vai `null` e a estimativa vai em `turbidez.ntu_experimental`; o dashboard usa a luz bloqueada pelo sensor de cor como índice relativo de turbidez. **Para calibrar:** medir padrões de formazina (ou comparar com um turbidímetro de referência), ajustar os coeficientes da `CALIBRACAO` em `turbidez_config.h`, trocar o `id` e marcar `validada = true`. Leituras sem sinal, saturadas, instáveis ou fora da faixa da curva são enviadas com o `status` correspondente, nunca como 0 NTU.
 
 ## Uso
 
@@ -96,7 +96,13 @@ Mudou alguma coisa (lanterna, pote, água de referência)? Aperte o botão **BOO
   "saturado": false,
   "media": { "f1_415": 2394.0, "f2_445": 4802.0, "...": "...", "clear": 31200.0, "nir": 1650.0 },
   "desvio": { "f1_415": 8.1, "f2_445": 11.3, "...": "...", "clear": 40.2, "nir": 6.0 },
-  "turbidez": { "ntu": 18.4, "tensao_v": 4.12, "luz_bloqueada_pct": 12.5, "classificacao": "LEVEMENTE TURVA" },
+  "firmware_version": "2026.10.21-turbidez-v2",
+  "turbidez": {
+    "status": "ok", "calibracao_id": "dfrobot-sen0189-fabricante-v1", "calibracao_status": "pendente",
+    "adc_raw": 2290, "tensao_v": 3.692, "desvio_mv": 8,
+    "ntu_experimental": 1593.0, "ntu": null,
+    "luz_bloqueada_pct": 12.5, "classificacao": "LEVEMENTE TURVA"
+  },
   "cores": [
     { "nome": "Violeta",       "comprimento_onda_nm": 415, "valor": 2394,  "porcentagem": 57.0 },
     { "nome": "Azul",          "comprimento_onda_nm": 445, "valor": 4802,  "porcentagem": 49.0 },
@@ -122,7 +128,8 @@ Mudou alguma coisa (lanterna, pote, água de referência)? Aperte o botão **BOO
 - `media` / `desvio`: os 10 canais crus do sensor e o quanto variaram nas 20 leituras (barras de erro do dashboard). `ganho`/`saturado`: configuração e alerta de luz forte demais.
 - `valor`: número captado pelo sensor naquela cor. `porcentagem`: quanto de luz passou comparado à água limpa (100% = igual à água limpa).
 - `turbidez.luz_bloqueada_pct`: turbidez pelo sensor de cor (AS7341): % da luz bloqueada em 590–630 nm, faixa onde a cor da água e a clorofila quase não absorvem (mesma ideia da ISO 7027). Vem sempre.
-- `turbidez.ntu`: turbidez em NTU, a unidade padrão. Vem `null` se o sensor de turbidez não estiver ligado; nesse caso a `classificacao` é estimada pelo sensor de cor.
+- `turbidez.status`: `ok`, `sem_sinal`, `saturado`, `instavel`, `fora_da_faixa_da_curva` ou `desativado`. `turbidez.ntu` = NTU **validado** (null enquanto `calibracao_status` = `pendente`); `ntu_experimental` = estimativa pela curva do fabricante.
+- `turbidez.classificacao`: palavra pela luz bloqueada do sensor de cor; pelas faixas da lei (NTU) só com calibração validada.
 - `contaminacao_pct`: 0 = água limpa, 100 = água podre de referência. Vem `null` até gravar a água suja.
 
 ## Limites
