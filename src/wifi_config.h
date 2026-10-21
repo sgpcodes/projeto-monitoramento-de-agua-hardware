@@ -30,6 +30,7 @@ inline WiFiMulti& redes() {
     multi.addAP(secrets::WIFI_SSID_2, secrets::WIFI_PASSWORD_2);
     multi.addAP(secrets::WIFI_SSID_3, secrets::WIFI_PASSWORD_3);
     multi.addAP(secrets::WIFI_SSID_4, secrets::WIFI_PASSWORD_4);
+    multi.addAP(secrets::WIFI_SSID_5, secrets::WIFI_PASSWORD_5);
     cadastradas = true;
   }
   return multi;
@@ -72,13 +73,16 @@ inline bool conectar(Stream& serial, bool mostrar = true) {
     serial.println(F("# Wi-Fi indisponivel (nenhuma das redes). Tento de novo na proxima medicao."));
     // Mostra o que o ESP32 enxerga: se a rede nao aparece, esta longe ou em 5 GHz;
     // se aparece e mesmo assim nao conecta, a senha (ou o nome) esta diferente.
+    WiFi.disconnect();  // para a tentativa de conexao antes de procurar redes
+    delay(100);
     const int16_t total = WiFi.scanNetworks();
     serial.print(F("# Redes que o ESP32 encontrou (so 2,4 GHz): "));
     for (int16_t i = 0; i < total; ++i) {
       serial.print(i ? ", " : "");
       serial.print(WiFi.SSID(i));
+      serial.printf(" (%d dBm)", WiFi.RSSI(i));
     }
-    serial.println(total > 0 ? "" : "nenhuma");
+    serial.println(total > 0 ? "" : total == 0 ? "nenhuma" : "falha ao procurar redes");
     WiFi.scanDelete();
     return false;
   }
