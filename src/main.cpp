@@ -10,7 +10,7 @@
 //
 // Uso: aperte o botao BOOT (ou digite gravar) para gravar a agua limpa (0%) e a
 // agua suja (100%); ficam salvas mesmo desligando. Fora isso, o aparelho mede a
-// lagoa sozinho a cada 1 minuto, sem parar, e envia para o dashboard.
+// lagoa sozinho a cada 10 segundos, sem parar, e envia para o dashboard.
 //
 // Contas, com o padrao de agua limpa como 100% de luz:
 //   % de luz que passou = amostra / padrao      absorbancia A = -log10(fracao)
@@ -36,7 +36,7 @@ namespace {
 using sensor_config::CANAIS;
 using sensor_config::CORES;
 
-constexpr uint32_t INTERVALO_MS = 60UL * 1000UL;       // medicao automatica: 1 minuto
+constexpr uint32_t INTERVALO_MS = 10UL * 1000UL;       // medicao automatica: 10 s (mudanca aparece quase na hora)
 constexpr uint32_t REENVIO_MS = 5UL * 60UL * 1000UL;   // tenta a fila a cada 5 min
 constexpr uint32_t WATCHDOG_S = 180;                   // travou 3 min? reinicia sozinho
 constexpr uint8_t REPLICAS = 3;                        // medicoes ao gravar limpa/suja
@@ -468,7 +468,7 @@ void menuGravar() {
 // ---- Comandos -----------------------------------------------------------------
 void ajuda() {
   Serial.println(F("\n=============== COMO USAR ===============\n"
-                   " O aparelho mede sozinho a cada 1 minuto. Digite e aperte Enter:\n"
+                   " O aparelho mede sozinho a cada 10 segundos. Digite e aperte Enter:\n"
                    "   gravar     gravar agua limpa ou agua suja (ou aperte o botao BOOT)\n"
                    "   n NOME     nome da agua no pote (ex.: n lagoa)\n"
                    "   m          medir agora\n"
