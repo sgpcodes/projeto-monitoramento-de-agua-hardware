@@ -51,8 +51,29 @@ inline bool agora(char* destino, size_t tamanho, const char* formato, uint32_t e
 
 // Conecta na rede disponivel (das do secrets.h) e espera a hora chegar.
 // mostrar = false: tenta em silencio (antes de cada envio).
+// Motivo da ultima recusa do roteador (para mostrar no monitor).
+inline uint8_t& ultimoMotivo() {
+  static uint8_t motivo = 0;
+  return motivo;
+}
+inline const char* textoMotivo(uint8_t m) {
+  switch (m) {
+    case 2: case 15: case 202: case 204: return "SENHA ERRADA ou seguranca incompativel (use WPA2, nao WPA3)";
+    case 201: return "rede nao encontrada";
+    case 203: return "roteador recusou a associacao (limite de aparelhos ou filtro)";
+    case 8: return "desconectado pelo proprio ESP32";
+    default: return "outro motivo";
+  }
+}
+
 inline bool conectar(Stream& serial, bool mostrar = true) {
   if (conectado()) return true;
+  static bool eventoRegistrado = false;
+  if (!eventoRegistrado) {
+    WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) { ultimoMotivo() = info.wifi_sta_disconnected.reason; },
+                 ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+    eventoRegistrado = true;
+  }
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);  // se o sinal cair depois, reconecta sozinho
   // Sem economia de energia no radio: com ela o ESP32 "cochila" entre pacotes e,
@@ -71,6 +92,7 @@ inline bool conectar(Stream& serial, bool mostrar = true) {
   serial.println();
   if (!conectado()) {
     serial.println(F("# Wi-Fi indisponivel (nenhuma das redes). Tento de novo na proxima medicao."));
+    if (ultimoMotivo()) serial.printf("# Motivo da recusa: %u = %s\n", ultimoMotivo(), textoMotivo(ultimoMotivo()));
     // Mostra o que o ESP32 enxerga: se a rede nao aparece, esta longe ou em 5 GHz;
     // se aparece e mesmo assim nao conecta, a senha (ou o nome) esta diferente.
     WiFi.disconnect();  // para a tentativa de conexao antes de procurar redes
