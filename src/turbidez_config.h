@@ -8,7 +8,9 @@
 // Ligacao (a saida chega a ~4,5 V e o ESP32 aguenta no maximo 3,3 V!):
 //   VCC -> VIN (5 V)    GND -> GND    chave D/A da plaquinha em "A"
 //   OUT ──[ 10 kΩ ]──┬── GPIO 34
-//                    └──[ 20 kΩ ]── GND        (divisor: 4,5 V vira 3,0 V)
+//                    └──[ 10 kΩ ]── GND        (divisor: 5 V vira 2,5 V)
+// O divisor e pela METADE de proposito: o ADC do ESP32 so mede bem ate ~2,45 V.
+// Com 10k/20k a agua limpa ficava em ~3 V no pino e a leitura travava no maximo.
 // =============================================================================
 
 #ifndef TURBIDEZ_CONFIG_H
@@ -25,15 +27,21 @@ constexpr bool INSTALADO = true;
 constexpr uint8_t PINO = 34;
 // Resistores do divisor. Se usar outros valores, ajuste aqui.
 constexpr float R1_OHMS = 10000.0f;  // entre o OUT e o GPIO 34
-constexpr float R2_OHMS = 20000.0f;  // entre o GPIO 34 e o GND
-constexpr float FATOR_DIVISOR = (R1_OHMS + R2_OHMS) / R2_OHMS;  // = 1,5
+constexpr float R2_OHMS = 10000.0f;  // entre o GPIO 34 e o GND
+constexpr float FATOR_DIVISOR = (R1_OHMS + R2_OHMS) / R2_OHMS;  // = 2,0
 
 constexpr uint8_t LEITURAS = 20;
 constexpr uint8_t OVERSAMPLE = 16;     // o ADC do ESP32 e ruidoso: media de 16 conversoes
 constexpr float MINIMO_MV = 500.0f;    // abaixo disso: fio solto / sem energia
-// Acima disso o pino passou de ~3,1 V: o ADC do ESP32 travou no maximo e o valor
+// Acima disso o pino passou de ~3,0 V: o ADC do ESP32 travou no maximo e o valor
 // nao vale (chave D/A em "D", ou divisor ligado errado). Agua limpa da ~4,1 V.
-constexpr float MAXIMO_MV = 4550.0f;
+constexpr float MAXIMO_MV = 3000.0f * FATOR_DIVISOR;
+
+// Tensao REAL entre VIN e GND, medida com o multimetro com tudo ligado (pela USB
+// costuma dar 4,5 a 4,8 V, nao 5 V). A curva do fabricante e para 5 V: o Arduino
+// Uno compensa isso sozinho (o ADC dele usa a propria alimentacao como regua), o
+// ESP32 nao. Sem esse ajuste, 0,3 V a menos ja faz agua limpa parecer muito turva.
+constexpr float ALIMENTACAO_V = 5.0f;
 
 // CALIBRACAO: com AGUA LIMPA no pote, a medicao deve dar perto de 0 NTU.
 // Se der mais, aumente este valor (em volts) ate chegar perto de 0. Ex.: 0.15
@@ -42,7 +50,7 @@ constexpr float AJUSTE_V = 0.0f;
 // Tensao -> NTU (unidade padrao de turbidez), curva do fabricante desse modelo de
 // sensor alimentado em 5 V. Vale de 2,5 V (~3000 NTU) a 4,2 V (~0 NTU).
 inline float ntuDaTensao(float mv) {
-  const float v = constrain(mv / 1000.0f + AJUSTE_V, 2.5f, 4.2f);
+  const float v = constrain(mv / 1000.0f * (5.0f / ALIMENTACAO_V) + AJUSTE_V, 2.5f, 4.2f);
   return max(0.0f, -1120.4f * v * v + 5742.3f * v - 4352.9f);
 }
 
@@ -69,7 +77,7 @@ struct Resultado {
 
 inline void iniciar() {
   if (INSTALADO) {
-    analogSetPinAttenuation(PINO, ADC_11db);  // faixa de 0 a ~3,1 V no pino
+    analogSetPinAttenuation(PINO, ADC_11db);  // faixa de 0 a ~3,1 V no pino (boa ate ~2,45 V)
   }
 }
 

@@ -39,11 +39,11 @@ constexpr char API_KEY[] = "CHAVE_COMBINADA_COM_O_BACK_END";
 |---|---|
 | AS7341 VIN / GND / SDA / SCL | 3V3 / GND / GPIO 21 / GPIO 22 |
 | Turbidez VCC / GND | VIN (5 V) / GND |
-| Turbidez OUT | divisor `OUT ─[10 kΩ]─┬─ GPIO 34`, `└─[20 kΩ]─ GND` (**obrigatório**) |
+| Turbidez OUT | divisor `OUT ─[10 kΩ]─┬─ GPIO 34`, `└─[10 kΩ]─ GND` (**obrigatório**; 5 V vira 2,5 V) |
 
 Chave D/A da plaquinha de turbidez em **A**. Se o sensor de turbidez não estiver ligado, use `INSTALADO = false` em `turbidez_config.h`.
 
-**Turbidez em NTU:** a tensão do sensor vira NTU pela curva do fabricante (válida de 2,5 V ≈ 3000 NTU a 4,2 V ≈ 0 NTU). Classificação: até 5 NTU = limpa (limite da água potável, Portaria GM/MS 888/2021); até 40 = levemente turva; até 100 = turva (limites das classes de água doce da CONAMA 357/2005); acima de 100 = muito turva. **Calibração:** com água limpa, o modo ao vivo (`v`) deve mostrar perto de 0 NTU. Se mostrar mais, aumente `AJUSTE_V` em `turbidez_config.h` (ex.: `0.15`).
+**Turbidez em NTU:** a tensão do sensor vira NTU pela curva do fabricante (válida de 2,5 V ≈ 3000 NTU a 4,2 V ≈ 0 NTU). Classificação: até 5 NTU = limpa (limite da água potável, Portaria GM/MS 888/2021); até 40 = levemente turva; até 100 = turva (limites das classes de água doce da CONAMA 357/2005); acima de 100 = muito turva. **Alimentação:** meça com o multímetro a tensão entre VIN e GND (com tudo ligado) e coloque em `ALIMENTACAO_V` em `turbidez_config.h`; pela USB costuma dar 4,5–4,8 V e a curva é para 5 V. **Calibração:** com água limpa, o modo ao vivo (`v`) deve mostrar perto de 0 NTU. Se mostrar mais, aumente `AJUSTE_V` em `turbidez_config.h` (ex.: `0.15`).
 
 ## Uso
 
