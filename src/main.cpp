@@ -286,7 +286,7 @@ void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, co
   }
   if (p.estado() == ph_config::Estado::SEM_SINAL) Serial.println(F(" ⚠ Sensor de pH SEM SINAL: confira os fios do Po e o divisor."));
   if (p.estado() == ph_config::Estado::INSTAVEL) Serial.println(F(" ⚠ pH ainda mudando: o eletrodo leva ate 2 min para estabilizar."));
-  if (p.valido && ph_config::calibracao().pontos == 0) Serial.println(F(" ⚠ pH sem calibrar: use as solucoes padrao (comando ph 6.86, depois ph 4.01)."));
+  if (p.valido && ph_config::calibracao().pontos == 0) Serial.println(F(" ⚠ pH sem calibrar: digite ph zero (sem solucao) ou ph N com uma solucao padrao."));
   if (t.semSinal()) Serial.println(F(" ⚠ Sensor de turbidez SEM SINAL: confira os fios e a chave D/A em \"A\"."));
   if (t.estado() == turbidez_config::Estado::INSTAVEL) {
     Serial.printf(" ⚠ Sensor de turbidez INSTAVEL (variou %.0f mV na medicao): bolhas na sonda ou mau contato.\n", t.desvioMv);
@@ -530,6 +530,7 @@ void ajuda() {
                    "   p          pausar / continuar as medicoes automaticas\n"
                    "   v          ver o sensor ao vivo (alinhar a lanterna)\n"
                    "   g N        ganho do sensor (1, 2, 4 ... 512)\n"
+                   "   ph zero    calibrar o pH 7 SEM solucao (clipe no conector do eletrodo)\n"
                    "   ph N       calibrar o pH na solucao padrao N (ex.: ph 6.86, ph 4.01)\n"
                    "   ph apagar  voltar o pH aos valores tipicos (sem calibracao)\n"
                    "   e          exportar o historico (CSV)\n"
@@ -573,7 +574,21 @@ void comando(char* texto) {
                   sensor_config::ganhoEmX(novo));
   } else if (!strcmp(cmd, "ph")) {
     estado.aoVivo = false;
-    if (arg && !strcmp(arg, "apagar")) {
+    if (arg && !strcmp(arg, "zero")) {
+      // Sem solucao padrao: com o BNC em curto o eletrodo "da" 0 mV, que e o pH 7
+      // (manual do eletrodo: zero point 7 +- 0,5).
+      Serial.println(F("# Calibrar o pH 7 SEM solucao:\n"
+                       "#   1. Desencaixe o eletrodo do conector redondo (BNC).\n"
+                       "#   2. Encoste um clipe ligando o PINO DO MEIO ao METAL DE FORA do BNC e segure."));
+      for (int s = 10; s > 0; --s) {
+        Serial.printf("#   Medindo em %d s...\n", s);
+        esp_task_wdt_reset();
+        delay(1000);
+      }
+      if (ph_config::calibrar(7.0f, Serial)) {
+        Serial.println(F("#   Pronto! Tire o clipe, encaixe o eletrodo e espere 2 min na agua."));
+      }
+    } else if (arg && !strcmp(arg, "apagar")) {
       ph_config::apagarCalibracao();
       Serial.println(F("# Calibracao do pH apagada (valores tipicos: pH 7 = 2,50 V)."));
     } else if (!arg || !ph_config::INSTALADO || !ph_config::calibrar(atof(arg), Serial)) {
@@ -723,7 +738,10 @@ void setup() {
   ajuda();
   if (!temPadrao()) Serial.println(F("# Falta gravar a AGUA LIMPA: aperte o botao BOOT e escolha 1."));
   if (!estado.ref.temPodre) Serial.println(F("# Falta gravar a AGUA SUJA: aperte o botao BOOT e escolha 2."));
-  if (ph_config::INSTALADO) Serial.printf("# Calibracao do pH: %s\n", ph_config::nomeCalibracao());
+  if (ph_config::INSTALADO) {
+    Serial.printf("# Calibracao do pH: %s\n", ph_config::nomeCalibracao());
+    if (ph_config::calibracao().pontos == 0) Serial.println(F("# Para calibrar o pH sem solucao, digite: ph zero"));
+  }
 }
 
 // loop() roda no nucleo 1: so mede, mostra e poe na fila (o envio e no nucleo 0).

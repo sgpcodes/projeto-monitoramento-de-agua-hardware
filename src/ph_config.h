@@ -18,8 +18,11 @@
 //     para a outra). Guarde com a tampinha com KCl, nunca seco.
 //   - O conector BNC tem que ficar limpo e seco.
 //
-// Calibracao (comando ph N no monitor): coloque o eletrodo numa solucao padrao,
-// espere 2 minutos e digite, por exemplo, ph 6.86 e depois ph 4.01 (ou 9.18).
+// Calibracao sem solucao (comando ph zero): com o BNC em curto o eletrodo "da" 0 mV,
+// que pelo manual e o pH 7 (+- 0,5); grava esse ponto e usa a inclinacao tipica.
+// Com solucao padrao (comando ph N): coloque o eletrodo na solucao, espere 2 minutos
+// e digite, por exemplo, ph 6.86 e depois ph 4.01 (ou 9.18).
+// Agua mineral serve de solucao: o pH vem no rotulo (ex.: ph 7.4).
 // Fica salva na placa. Sem calibrar, usa os valores tipicos da plaquinha
 // (pH 7 = 2,50 V e -0,18 V/pH): o pH vai no JSON com calibracao "pendente".
 // =============================================================================
@@ -198,7 +201,7 @@ inline bool calibrar(float phPadrao, Stream& serial) {
   if (c.pontos >= 2 && (fabsf(mvPorPh) < 120.0f || fabsf(mvPorPh) > 240.0f)) {
     serial.println(F(" ⚠ Inclinacao estranha: confira as solucoes ou se o eletrodo precisa de KCl (8 h)."));
   }
-  if (c.pontos < 2) serial.println(F("   Grave mais uma solucao (ex.: ph 4.01) para a reta completa."));
+  if (c.pontos < 2) serial.println(F("   (Opcional) Para mais precisao, grave outra solucao longe desta (ex.: ph 4.01)."));
   return true;
 }
 

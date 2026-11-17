@@ -54,7 +54,8 @@ Chave D/A da plaquinha de turbidez em **A**. Se o sensor de turbidez não estive
 
 **pH:** o eletrodo vai no conector BNC da plaquinha. A saída `Po` dá ~2,5 V em pH 7 e muda ~0,18 V por unidade de pH (sobe na água ácida). Antes de usar:
 1. Eletrodo novo (ou parado há muito tempo): deixe **8 horas na solução de KCl 3 M** (manual do eletrodo).
-2. **Calibre** com solução padrão: eletrodo na solução, espere 2 minutos e digite `ph 6.86` (ou `ph 7`); lave com água destilada, coloque na outra e digite `ph 4.01` (ou `ph 9.18`). Fica salva na placa. Sem calibrar, o pH vai com `calibracao_status: "pendente"` (valores típicos da plaquinha).
+2. **Calibre sem solução** com `ph zero`: desencaixe o eletrodo, encoste um clipe ligando o pino do meio ao metal de fora do BNC e segure; em 10 s a placa grava esse ponto como pH 7 (o manual do eletrodo diz que ele dá 0 mV em pH 7 ± 0,5). Encaixe o eletrodo de volta. Água mineral também serve: o pH vem no rótulo (ex.: `ph 7.4`).
+   Para mais precisão, **calibre** com solução padrão: eletrodo na solução, espere 2 minutos e digite `ph 6.86` (ou `ph 7`); lave com água destilada, coloque na outra e digite `ph 4.01` (ou `ph 9.18`). Fica salva na placa. Sem calibrar, o pH vai com `calibracao_status: "pendente"` (valores típicos da plaquinha).
 3. Entre uma água e outra, lave o eletrodo com água destilada; guarde com a tampinha com KCl, nunca seco. O BNC tem que ficar limpo e seco.
 
 ## Uso
@@ -73,6 +74,7 @@ Chave D/A da plaquinha de turbidez em **A**. Se o sensor de turbidez não estive
 | `p` | Pausar / continuar |
 | `v` | Ver o sensor ao vivo (alinhar a lanterna) |
 | `g N` | Ganho do sensor (1, 2, 4 … 512). Apaga o padrão |
+| `ph zero` | Calibrar o pH 7 sem solução (clipe ligando o pino do meio ao metal de fora do BNC) |
 | `ph N` | Calibrar o pH na solução padrão N (ex.: `ph 6.86`, `ph 4.01`) |
 | `ph apagar` | Apagar a calibração do pH |
 | `e` | Exportar o histórico CSV |
