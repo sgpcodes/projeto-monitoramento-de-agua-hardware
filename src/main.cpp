@@ -655,8 +655,10 @@ void tarefaEnvio(void*) {
       esp_task_wdt_reset();
     }
     if (chegou) {
+      // Envia primeiro e so depois imprime: o envio leva segundos e nao corta o relatorio.
+      const dashboard_api::Envio envio = dashboard_api::enviar(m);
       Serial.printf("\n# Envio %s (%s %.8s):", m.amostra, m.tipo, m.temData ? m.medidoEm + 11 : "sem hora");
-      imprimirEnvio(dashboard_api::enviar(m));
+      imprimirEnvio(envio);
     }
     // Medicoes guardadas sem internet: tenta de novo de tempos em tempos.
     if (millis() - reenvioMs >= REENVIO_MS) {
