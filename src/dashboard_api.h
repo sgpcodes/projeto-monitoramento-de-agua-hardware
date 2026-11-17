@@ -336,10 +336,11 @@ inline Reenvio reenviarPendentes() {
   return r;
 }
 
-inline Envio enviar(const Medicao& m) {
+// tentar = false: nem tenta a API (ela acabou de falhar), guarda direto na flash.
+inline Envio enviar(const Medicao& m, bool tentar = true) {
   if (!m.temData) return Envio::SEM_DATA;  // sem data a API nao sabe a qual coleta pertence
   const String json = montarJson(m);
-  const int codigo = post(json);
+  const int codigo = tentar ? post(json) : -1;
   if (codigo >= 200 && codigo < 300) return Envio::ENVIADO;
   if (tentarDeNovo(codigo)) {
     if (tamanho(PENDENTES) + json.length() > LIMITE_PENDENTES) return Envio::FILA_CHEIA;

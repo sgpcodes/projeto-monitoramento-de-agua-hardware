@@ -56,6 +56,7 @@ constexpr uint8_t PINO_BOTAO = 0;
 // Fila entre os nucleos e a tarefa de envio.
 constexpr uint8_t TAMANHO_FILA = 10;                   // medicoes esperando na RAM
 constexpr uint32_t RETENTAR_WIFI_MS = 60UL * 1000UL;   // sem Wi-Fi: tenta reconectar a cada 1 min
+constexpr uint32_t RETENTAR_API_MS = 60UL * 1000UL;    // API fora do ar: tenta de novo a cada 1 min
 constexpr BaseType_t NUCLEO_ENVIO = 0;                 // o mesmo do Wi-Fi
 QueueHandle_t fila = nullptr;
 
@@ -642,6 +643,8 @@ void tarefaEnvio(void*) {
   esp_task_wdt_add(nullptr);  // o vigia tambem cuida desta tarefa
   uint32_t ultimaConexao = millis();
   uint32_t reenvioMs = millis();
+  uint32_t falhaApiMs = 0;
+  bool apiFora = false;
   dashboard_api::Medicao m;
   while (true) {
     esp_task_wdt_reset();
@@ -656,9 +659,21 @@ void tarefaEnvio(void*) {
     }
     if (chegou) {
       // Envia primeiro e so depois imprime: o envio leva segundos e nao corta o relatorio.
-      const dashboard_api::Envio envio = dashboard_api::enviar(m);
+      // API fora do ar: cada tentativa trava ate 30 s e as medicoes (a cada 10 s)
+      // encheriam a fila. Entao, depois de uma falha, guarda direto na flash e so
+      // tenta a API de novo 1 min depois.
+      const bool tentar = !apiFora || millis() - falhaApiMs >= RETENTAR_API_MS;
+      const dashboard_api::Envio envio = dashboard_api::enviar(m, tentar);
+      if (tentar) {
+        apiFora = envio == dashboard_api::Envio::GUARDADO || envio == dashboard_api::Envio::FILA_CHEIA;
+        if (apiFora) falhaApiMs = millis();
+      }
       Serial.printf("\n# Envio %s (%s %.8s):", m.amostra, m.tipo, m.temData ? m.medidoEm + 11 : "sem hora");
-      imprimirEnvio(envio);
+      if (!tentar && envio == dashboard_api::Envio::GUARDADO) {
+        Serial.println(F(" guardada na placa (dashboard fora do ar; nova tentativa a cada 1 min)."));
+      } else {
+        imprimirEnvio(envio);
+      }
     }
     // Medicoes guardadas sem internet: tenta de novo de tempos em tempos.
     if (millis() - reenvioMs >= REENVIO_MS) {
