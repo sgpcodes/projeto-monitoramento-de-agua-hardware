@@ -4,6 +4,7 @@
 // Arquivos:
 //   sensor_config.h    sensor de cor AS7341
 //   turbidez_config.h  sensor de turbidez (em NTU)
+//   ph_config.h        sensor de pH (e a calibracao com solucoes padrao)
 //   wifi_config.h      Wi-Fi e hora da internet
 //   dashboard_api.h    JSON, envio para a API, fila sem internet e historico CSV
 //   secrets.h          senha do Wi-Fi, link e chave da API (fora do git)
@@ -11,6 +12,14 @@
 // Uso: aperte o botao BOOT (ou digite gravar) para gravar a agua limpa (0%) e a
 // agua suja (100%); ficam salvas mesmo desligando. Fora isso, o aparelho mede a
 // lagoa sozinho a cada 10 segundos, sem parar, e envia para o dashboard.
+//
+// Os dois nucleos do ESP32 trabalham ao mesmo tempo:
+//   nucleo 1 (loop)        mede os 3 sensores, mostra o relatorio, grava o historico
+//                          e poe a medicao na FILA. Nunca espera a internet.
+//   nucleo 0 (tarefaEnvio) tira da fila e envia para a API. E o nucleo do Wi-Fi:
+//                          a espera pela internet (ate 30 s) nao atrasa as medicoes.
+// A fila guarda ate 10 medicoes na RAM; sem internet elas vao para a fila da
+// memoria flash (/pendentes.jsonl) e sao reenviadas depois.
 //
 // Contas, com o padrao de agua limpa como 100% de luz:
 //   % de luz que passou = amostra / padrao      absorbancia A = -log10(fracao)
@@ -27,6 +36,7 @@
 #include <esp_task_wdt.h>
 
 #include "dashboard_api.h"
+#include "ph_config.h"
 #include "sensor_config.h"
 #include "turbidez_config.h"
 #include "wifi_config.h"
@@ -43,6 +53,11 @@ constexpr uint8_t REPLICAS = 3;                        // medicoes ao gravar lim
 constexpr char ARQUIVO_REFERENCIA[] = "/referencia.bin";
 // Botao BOOT da placa. Para um botao externo: ligue entre GPIO 4 e GND e mude para 4.
 constexpr uint8_t PINO_BOTAO = 0;
+// Fila entre os nucleos e a tarefa de envio.
+constexpr uint8_t TAMANHO_FILA = 10;                   // medicoes esperando na RAM
+constexpr uint32_t RETENTAR_WIFI_MS = 60UL * 1000UL;   // sem Wi-Fi: tenta reconectar a cada 1 min
+constexpr BaseType_t NUCLEO_ENVIO = 0;                 // o mesmo do Wi-Fi
+QueueHandle_t fila = nullptr;
 
 Adafruit_AS7341 as7341;
 
@@ -62,7 +77,6 @@ struct Estado {
   bool aoVivo = false;     // comando v
   bool automatico = true;  // comando p
   uint32_t proximaMs = INTERVALO_MS;
-  uint32_t reenvioMs = 0;
   char amostra[21] = "lagoa";  // comando n
   Referencia ref;
 } estado;
@@ -145,7 +159,8 @@ const char* palavraContaminacao(float v) {
 }
 
 // Tudo que vai no JSON (e no relatorio) em palavras e porcentagens.
-dashboard_api::Diagnostico diagnosticar(const Indices& x, const turbidez_config::Resultado& t) {
+dashboard_api::Diagnostico diagnosticar(const Indices& x, const turbidez_config::Resultado& t,
+                                        const ph_config::Resultado& p) {
   dashboard_api::Diagnostico d;
   for (uint8_t c = 0; c < CORES; ++c) d.porcentagem[c] = x.luz[c] * 100.0f;
   d.turbidez = palavraTurbidez(x, t);
@@ -155,11 +170,18 @@ dashboard_api::Diagnostico diagnosticar(const Indices& x, const turbidez_config:
   d.temContaminacao = x.temEscala;
   d.contaminacaoPct = x.contaminacao * 100.0f;
   d.contaminacao = palavraContaminacao(x.contaminacao);
+  d.ph = !p.valido ? nullptr : p.temPh() ? ph_config::classificar(p.ph) : "SEM LEITURA";
   String turb = d.turbidez;
   turb.toLowerCase();
-  d.resumo = "Agua " + turb + ", " +
-             (x.algas < INDICE_MODERADO ? "sem sinal de algas" : x.algas <= INDICE_ALTO ? "com sinal fraco de algas" : "com sinal de algas") +
-             ", " + (x.cor < INDICE_MODERADO ? "cor normal" : x.cor <= INDICE_ALTO ? "levemente amarelada" : "cor de cha") + ".";
+  String resumo = "Agua " + turb + ", " +
+                  (x.algas < INDICE_MODERADO ? "sem sinal de algas" : x.algas <= INDICE_ALTO ? "com sinal fraco de algas" : "com sinal de algas") +
+                  ", " + (x.cor < INDICE_MODERADO ? "cor normal" : x.cor <= INDICE_ALTO ? "levemente amarelada" : "cor de cha");
+  if (p.temPh()) {
+    String palavra = ph_config::classificar(p.ph);
+    palavra.toLowerCase();
+    resumo += ", pH " + String(p.ph, 1) + " (" + palavra + ")";
+  }
+  strlcpy(d.resumo, (resumo + ".").c_str(), sizeof(d.resumo));
   return d;
 }
 
@@ -209,7 +231,7 @@ void imprimirEnvio(dashboard_api::Envio envio) {
 }
 
 void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, const turbidez_config::Resultado& t,
-                       const Indices& x, const dashboard_api::Diagnostico& d) {
+                       const ph_config::Resultado& p, const Indices& x, const dashboard_api::Diagnostico& d) {
   char quando[17];
   if (!wifi_config::agora(quando, sizeof(quando), "%d/%m/%Y %H:%M")) strcpy(quando, "sem hora");
 
@@ -238,6 +260,15 @@ void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, co
     }
     Serial.println();
   }
+  if (p.valido) {
+    if (p.temPh()) {
+      Serial.printf(" pH        %.2f  %s", p.ph, d.ph);
+    } else {
+      Serial.printf(" pH        SEM LEITURA (%s)", ph_config::nomeEstado(p.estado()));
+    }
+    Serial.printf("  (sensor %.3f V, variacao %.0f mV, calibracao %s)\n", p.mediaMv / 1000.0f, p.desvioMv,
+                  ph_config::nomeCalibracao());
+  }
   Serial.printf(" Algas     %s\n Cor       %s\n\n", d.algas, d.cor);
 
   Serial.println(F(" Cor            Onda    Valor   Luz que passou"));
@@ -252,6 +283,9 @@ void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, co
                   "   Confira se a lanterna esta acesa e alinhada (comando v) ou aumente o ganho (ex.: g 128).\n",
                   r.media[sensor_config::CLEAR]);
   }
+  if (p.estado() == ph_config::Estado::SEM_SINAL) Serial.println(F(" ⚠ Sensor de pH SEM SINAL: confira os fios do Po e o divisor."));
+  if (p.estado() == ph_config::Estado::INSTAVEL) Serial.println(F(" ⚠ pH ainda mudando: o eletrodo leva ate 2 min para estabilizar."));
+  if (p.valido && ph_config::calibracao().pontos == 0) Serial.println(F(" ⚠ pH sem calibrar: use as solucoes padrao (comando ph 6.86, depois ph 4.01)."));
   if (t.semSinal()) Serial.println(F(" ⚠ Sensor de turbidez SEM SINAL: confira os fios e a chave D/A em \"A\"."));
   if (t.estado() == turbidez_config::Estado::INSTAVEL) {
     Serial.printf(" ⚠ Sensor de turbidez INSTAVEL (variou %.0f mV na medicao): bolhas na sonda ou mau contato.\n", t.desvioMv);
@@ -281,27 +315,37 @@ void imprimirRelatorio(const char* titulo, const sensor_config::Resultado& r, co
 }
 
 // ---- Medir e enviar -------------------------------------------------------------
-bool medirSensores(uint16_t esperaMs, sensor_config::Resultado& r, turbidez_config::Resultado& t) {
+bool medirSensores(uint16_t esperaMs, sensor_config::Resultado& r, turbidez_config::Resultado& t,
+                   ph_config::Resultado& p) {
   Serial.print(F("# Medindo"));
   if (!sensor_config::medir(as7341, Serial, r, esperaMs)) {
     Serial.println(F("# ERRO: o sensor de cor nao respondeu. Confira os fios."));
     return false;
   }
   t = turbidez_config::medir();
+  p = ph_config::medir();
   return true;
 }
 
-// Calcula, mostra o relatorio, envia para a API e grava no historico.
+// Calcula, mostra o relatorio, grava no historico e poe na fila de envio (nucleo 0).
 void relatarEEnviar(const char* tipo, const char* nome, const char* titulo, const sensor_config::Resultado& r,
-                    const turbidez_config::Resultado& t) {
+                    const turbidez_config::Resultado& t, const ph_config::Resultado& p) {
   const Indices x = calcular(r);
-  const dashboard_api::Diagnostico d = diagnosticar(x, t);
-  imprimirRelatorio(titulo, r, t, x, d);
-  const dashboard_api::Medicao m = {tipo, nome, sensor_config::ganhoEmX(estado.ganho), &r, &t, &d};
-  wifi_config::conectar(Serial, false);  // se caiu ou nunca conectou, tenta de novo
-  const dashboard_api::Envio envio = dashboard_api::enviar(m);
-  imprimirEnvio(envio);
+  dashboard_api::Medicao m;
+  m.diagnostico = diagnosticar(x, t, p);
+  imprimirRelatorio(titulo, r, t, p, x, m.diagnostico);
+  m.tipo = tipo;
+  strlcpy(m.amostra, nome, sizeof(m.amostra));
+  m.ganho = sensor_config::ganhoEmX(estado.ganho);
+  m.temData = wifi_config::agora(m.data, sizeof(m.data), "%Y-%m-%d", 50) &&
+              wifi_config::agora(m.medidoEm, sizeof(m.medidoEm), "%Y-%m-%dT%H:%M:%S-03:00", 50);
+  m.cor = r;
+  m.turbidez = t;
+  m.ph = p;
   if (!dashboard_api::registrar(m)) Serial.println(F(" ✗ Historico CHEIO: baixe com e e digite apagar sim"));
+  if (xQueueSend(fila, &m, 0) != pdTRUE) {
+    Serial.println(F(" ✗ Fila de envio cheia (internet muito lenta): esta medicao ficou so no historico da placa."));
+  }
 
   // Hora da proxima medicao automatica (pela hora da internet, se ja tiver).
   time_t proxima = time(nullptr) + INTERVALO_MS / 1000;
@@ -339,11 +383,12 @@ void medirAmostra() {
   }
   sensor_config::Resultado r;
   turbidez_config::Resultado t;
-  if (!medirSensores(0, r, t)) return;
+  ph_config::Resultado p;
+  if (!medirSensores(0, r, t, p)) return;
   char titulo[21];
   strcpy(titulo, estado.amostra);
   for (char* c = titulo; *c; ++c) *c = toupper(*c);
-  relatarEEnviar("amostra", estado.amostra, titulo, r, t);
+  relatarEEnviar("amostra", estado.amostra, titulo, r, t, p);
 }
 
 // ---- Botao e teclado -------------------------------------------------------------
@@ -384,7 +429,7 @@ bool esperarEnter(uint32_t tempoMs) { return lerLinha(tempoMs) != "x"; }
 // ---- Gravar referencias (botao BOOT): agua limpa (0%) e agua suja (100%) --------
 // Mostra o cabecalho, espera Enter e mede 3 vezes; devolve a media.
 bool passo(const char* cabecalho, const char* instrucao, sensor_config::Resultado& r,
-           turbidez_config::Resultado& t) {
+           turbidez_config::Resultado& t, ph_config::Resultado& p) {
   Serial.printf("\n==================================================\n %s\n"
                 "==================================================\n %s\n"
                 " Lanterna ACESA, mesma posicao, caixa fechada.\n"
@@ -397,11 +442,13 @@ bool passo(const char* cabecalho, const char* instrucao, sensor_config::Resultad
   r = sensor_config::Resultado();
   for (uint8_t c = 0; c < CANAIS; ++c) r.media[c] = r.desvio[c] = 0;
   t = turbidez_config::Resultado();
+  p = ph_config::Resultado();
   for (uint8_t i = 1; i <= REPLICAS; ++i) {
     Serial.printf("   Medicao %u/3 ", i);
     sensor_config::Resultado ri;
     turbidez_config::Resultado ti;
-    if (!medirSensores(i == 1 ? sensor_config::ESPERA_MS : 0, ri, ti)) return false;
+    ph_config::Resultado pi;
+    if (!medirSensores(i == 1 ? sensor_config::ESPERA_MS : 0, ri, ti, pi)) return false;
     for (uint8_t c = 0; c < CANAIS; ++c) {
       r.media[c] += ri.media[c] / REPLICAS;
       r.desvio[c] += ri.desvio[c] / REPLICAS;
@@ -412,8 +459,13 @@ bool passo(const char* cabecalho, const char* instrucao, sensor_config::Resultad
     t.mediaMv += ti.mediaMv / REPLICAS;
     t.adcBruto += ti.adcBruto / REPLICAS;
     t.desvioMv = max(t.desvioMv, ti.desvioMv);  // o pior dos 3: instabilidade nao some na media
+    p.valido = pi.valido;
+    p.mediaMv += pi.mediaMv / REPLICAS;
+    p.adcBruto += pi.adcBruto / REPLICAS;
+    p.desvioMv = max(p.desvioMv, pi.desvioMv);
   }
   t.ntu = turbidez_config::ntuDaTensao(t.mediaMv);
+  p.ph = ph_config::phDaTensao(p.mediaMv);
   return true;
 }
 
@@ -421,8 +473,9 @@ bool passo(const char* cabecalho, const char* instrucao, sensor_config::Resultad
 bool gravarLimpa(const char* cabecalho) {
   sensor_config::Resultado r;
   turbidez_config::Resultado t;
-  if (!passo(cabecalho, "Coloque AGUA LIMPA no pote, ate a marca.", r, t) || !salvarPadrao(r)) return false;
-  relatarEEnviar("branco", "agua_limpa", "AGUA LIMPA (referencia 0%)", r, t);
+  ph_config::Resultado p;
+  if (!passo(cabecalho, "Coloque AGUA LIMPA no pote, ate a marca.", r, t, p) || !salvarPadrao(r)) return false;
+  relatarEEnviar("branco", "agua_limpa", "AGUA LIMPA (referencia 0%)", r, t, p);
   return true;
 }
 
@@ -434,12 +487,13 @@ bool gravarSuja(const char* cabecalho) {
   }
   sensor_config::Resultado r;
   turbidez_config::Resultado t;
-  if (!passo(cabecalho, "Lave o pote e coloque a AGUA SUJA. Mexa bem.", r, t)) return false;
+  ph_config::Resultado p;
+  if (!passo(cabecalho, "Lave o pote e coloque a AGUA SUJA. Mexa bem.", r, t, p)) return false;
   memcpy(estado.ref.podre, calcular(r).absorb, sizeof(estado.ref.podre));
   estado.ref.temPodre = true;
   salvarReferencia();
   Serial.println(F(" ✓ REFERENCIA DE AGUA SUJA SALVA (100%)"));
-  relatarEEnviar("amostra", "agua_podre", "AGUA SUJA (referencia 100%)", r, t);
+  relatarEEnviar("amostra", "agua_podre", "AGUA SUJA (referencia 100%)", r, t, p);
   return true;
 }
 
@@ -475,6 +529,8 @@ void ajuda() {
                    "   p          pausar / continuar as medicoes automaticas\n"
                    "   v          ver o sensor ao vivo (alinhar a lanterna)\n"
                    "   g N        ganho do sensor (1, 2, 4 ... 512)\n"
+                   "   ph N       calibrar o pH na solucao padrao N (ex.: ph 6.86, ph 4.01)\n"
+                   "   ph apagar  voltar o pH aos valores tipicos (sem calibracao)\n"
                    "   e          exportar o historico (CSV)\n"
                    "   apagar sim apagar o historico (baixe antes!)\n"
                    "========================================="));
@@ -514,6 +570,16 @@ void comando(char* texto) {
     salvarReferencia();
     Serial.printf("# Ganho: %uX. A proxima medicao (com agua limpa) vira o novo padrao.\n",
                   sensor_config::ganhoEmX(novo));
+  } else if (!strcmp(cmd, "ph")) {
+    estado.aoVivo = false;
+    if (arg && !strcmp(arg, "apagar")) {
+      ph_config::apagarCalibracao();
+      Serial.println(F("# Calibracao do pH apagada (valores tipicos: pH 7 = 2,50 V)."));
+    } else if (!arg || !ph_config::INSTALADO || !ph_config::calibrar(atof(arg), Serial)) {
+      Serial.printf("# Use: ph N (N = pH da solucao padrao, de 1 a 13, ex.: ph 6.86). Calibracao atual: %s\n",
+                    ph_config::nomeCalibracao());
+    }
+    estado.proximaMs = millis() + INTERVALO_MS;
   } else if (!strcmp(cmd, "e")) {
     dashboard_api::exportar(Serial);
   } else if (!strcmp(cmd, "apagar")) {
@@ -562,7 +628,45 @@ void aoVivo() {
     Serial.printf("Turbidez %.2f V (ADC %.0f)", mv / 1000.0f, bruto);
     if (!isnan(ntu)) Serial.printf(" ~%.0f NTU experimental", ntu);
   }
+  if (ph_config::INSTALADO) {
+    const float mv = ph_config::lerMv();
+    Serial.printf(" | pH %.2f (%.3f V)", ph_config::phDaTensao(mv), mv / 1000.0f);
+  }
   Serial.println(saturado ? F("  <- LUZ FORTE DEMAIS") : F(""));
+}
+
+// ---- Nucleo 0: tarefa que envia para a API ------------------------------------------
+// Fica esperando a fila. Cada medicao que chega e enviada (ou guardada na flash se
+// estiver sem internet); a cada 5 min tenta de novo as guardadas.
+void tarefaEnvio(void*) {
+  esp_task_wdt_add(nullptr);  // o vigia tambem cuida desta tarefa
+  uint32_t ultimaConexao = millis();
+  uint32_t reenvioMs = millis();
+  dashboard_api::Medicao m;
+  while (true) {
+    esp_task_wdt_reset();
+    const bool chegou = xQueueReceive(fila, &m, pdMS_TO_TICKS(1000)) == pdTRUE;
+
+    // Sem Wi-Fi: tenta reconectar no maximo 1 vez por minuto (leva ate 20 s);
+    // enquanto isso as medicoes vao direto para a fila da flash, sem esperar.
+    if (!wifi_config::conectado() && millis() - ultimaConexao >= RETENTAR_WIFI_MS) {
+      ultimaConexao = millis();
+      wifi_config::conectar(Serial, false);
+      esp_task_wdt_reset();
+    }
+    if (chegou) {
+      Serial.printf("\n# Envio %s (%s %.8s):", m.amostra, m.tipo, m.temData ? m.medidoEm + 11 : "sem hora");
+      imprimirEnvio(dashboard_api::enviar(m));
+    }
+    // Medicoes guardadas sem internet: tenta de novo de tempos em tempos.
+    if (millis() - reenvioMs >= REENVIO_MS) {
+      reenvioMs = millis();
+      if (dashboard_api::temPendentes() && wifi_config::conectado()) {
+        Serial.println(F("\n# Enviando as medicoes guardadas sem internet..."));
+        imprimirReenvio(dashboard_api::reenviarPendentes());
+      }
+    }
+  }
 }
 
 }  // namespace
@@ -572,7 +676,8 @@ void setup() {
   pinMode(PINO_BOTAO, INPUT_PULLUP);
   esp_task_wdt_init(WATCHDOG_S, true);  // vigia: se o programa travar, a placa reinicia
   esp_task_wdt_add(nullptr);
-  Serial.println(F("\n# Ligacoes: AS7341 VIN=3V3 SDA=21 SCL=22 · Turbidez VCC=VIN(5V) OUT=divisor->GPIO 34"));
+  Serial.println(F("\n# Ligacoes: AS7341 VIN=3V3 SDA=21 SCL=22 · Turbidez VCC=VIN(5V) OUT=divisor->GPIO 34"
+                   " · pH V+=VIN(5V) Po=divisor->GPIO 35"));
   turbidez_config::iniciar();
   if (!sensor_config::iniciar(as7341)) {
     Serial.println(F("# ERRO: AS7341 nao encontrado. Confira os fios."));
@@ -581,7 +686,15 @@ void setup() {
   Serial.println(F("# Sensores prontos."));
 
   dashboard_api::iniciar(Serial);  // memoria flash: fila e historico
+  ph_config::iniciar();            // depois da flash: le a calibracao salva
   wifi_config::iniciar(Serial);    // Wi-Fi e hora
+
+  // Fila entre os nucleos e a tarefa de envio no nucleo 0 (pilha grande: HTTPS).
+  fila = xQueueCreate(TAMANHO_FILA, sizeof(dashboard_api::Medicao));
+  if (fila == nullptr || xTaskCreatePinnedToCore(tarefaEnvio, "envio", 12288, nullptr, 1, nullptr, NUCLEO_ENVIO) != pdPASS) {
+    Serial.println(F("# ERRO: sem memoria para a fila de envio."));
+    while (true) delay(1000);
+  }
   carregarReferencia();
   if (estado.ref.temPadrao) {  // volta o ganho usado no padrao salvo
     estado.ganho = estado.ref.ganho;
@@ -593,8 +706,10 @@ void setup() {
   ajuda();
   if (!temPadrao()) Serial.println(F("# Falta gravar a AGUA LIMPA: aperte o botao BOOT e escolha 1."));
   if (!estado.ref.temPodre) Serial.println(F("# Falta gravar a AGUA SUJA: aperte o botao BOOT e escolha 2."));
+  if (ph_config::INSTALADO) Serial.printf("# Calibracao do pH: %s\n", ph_config::nomeCalibracao());
 }
 
+// loop() roda no nucleo 1: so mede, mostra e poe na fila (o envio e no nucleo 0).
 void loop() {
   esp_task_wdt_reset();  // "estou vivo"
   lerTeclado();
@@ -609,14 +724,5 @@ void loop() {
   if (estado.automatico && static_cast<int32_t>(millis() - estado.proximaMs) >= 0) {
     estado.proximaMs = millis() + INTERVALO_MS;
     medirAmostra();
-  }
-
-  // Leituras guardadas sem internet: tenta de novo de tempos em tempos.
-  if (millis() - estado.reenvioMs >= REENVIO_MS) {
-    estado.reenvioMs = millis();
-    if (dashboard_api::temPendentes() && wifi_config::conectado()) {
-      Serial.println(F("\n# Enviando as medicoes guardadas sem internet..."));
-      imprimirReenvio(dashboard_api::reenviarPendentes());
-    }
   }
 }

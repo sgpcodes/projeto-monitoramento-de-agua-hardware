@@ -2,7 +2,7 @@
 // dashboard_api.h — envia as medicoes para a API (back-end / dashboard)
 // -----------------------------------------------------------------------------
 // Cada medicao:
-//   1. vira um JSON: as 8 cores (valor e %), a turbidez em NTU e o diagnostico;
+//   1. vira um JSON: as 8 cores (valor e %), a turbidez, o pH e o diagnostico;
 //   2. vai por POST para {API_URL}/api/leituras/ com o header X-API-Key:
 //        2xx -> ENVIADO
 //        sem internet / erro 5xx -> GUARDADO em /pendentes.jsonl e reenviado depois
@@ -22,6 +22,7 @@
 #include <WiFiClientSecure.h>
 #include <esp_task_wdt.h>
 
+#include "ph_config.h"
 #include "secrets.h"
 #include "sensor_config.h"
 #include "turbidez_config.h"
@@ -35,7 +36,7 @@ constexpr uint16_t TIMEOUT_MS = 30000;               // Render gratis pode levar
 constexpr size_t LIMITE_PENDENTES = 300UL * 1024UL;  // ~500 medicoes esperando envio
 constexpr size_t LIMITE_HISTORICO = 900UL * 1024UL;  // ~6.500 medicoes = ~4,5 dias
 constexpr uint8_t REENVIOS_POR_VEZ = 10;
-constexpr char FIRMWARE_VERSAO[] = "2026.10.21-turbidez-v2";  // vai no JSON (firmware_version)
+constexpr char FIRMWARE_VERSAO[] = "2026.11.17-ph-v1";  // vai no JSON (firmware_version)
 constexpr size_t MAX_LINHA = 2048;                   // uma medicao em JSON tem ~1,3 KB
 constexpr size_t LIMITE_RESTANTES = 60UL * 1024UL;  // o que cabe na RAM ao reescrever a fila
 
@@ -51,17 +52,23 @@ struct Diagnostico {
   bool temContaminacao;                     // so depois do ensaio (agua podre medida)
   float contaminacaoPct;                    // 0 = agua limpa, 100 = agua podre
   const char* contaminacao;                 // em palavras
-  String resumo;                            // ex.: "Agua turva, sem sinal de algas, cor normal."
+  const char* ph;                           // ACIDA | NORMAL | ALCALINA | SEM LEITURA (null = sem sensor)
+  char resumo[160];                         // ex.: "Agua turva, sem sinal de algas, cor normal, pH 7,1."
 };
 
-// Tudo que vai no JSON de uma medicao.
+// Tudo que vai no JSON de uma medicao. E uma COPIA completa (sem ponteiros para
+// variaveis): vai pela fila do nucleo que mede para o nucleo que envia.
 struct Medicao {
-  const char* tipo;     // branco (agua limpa de referencia) | amostra
-  const char* amostra;  // nome da agua no pote (comando n), ex.: lagoa
-  uint16_t ganho;       // so para o historico CSV
-  const sensor_config::Resultado* cor;
-  const turbidez_config::Resultado* turbidez;
-  const Diagnostico* diagnostico;
+  const char* tipo;      // branco (agua limpa de referencia) | amostra
+  char amostra[21];      // nome da agua no pote (comando n), ex.: lagoa
+  uint16_t ganho;
+  bool temData;          // false: o relogio ainda nao pegou a hora da internet
+  char data[11];         // data da coleta, AAAA-MM-DD
+  char medidoEm[26];     // hora da MEDICAO (nao a do envio, que pode atrasar)
+  sensor_config::Resultado cor;
+  turbidez_config::Resultado turbidez;
+  ph_config::Resultado ph;
+  Diagnostico diagnostico;
 };
 
 inline size_t& linhasHistorico() {
@@ -86,7 +93,7 @@ inline void iniciar(Stream& serial) {
   if (!LittleFS.exists(HISTORICO)) {
     File f = LittleFS.open(HISTORICO, FILE_WRITE);
     f.println(F("tipo,amostra,data_hora,uptime_s,ganho,f1_415,f2_445,f3_480,f4_515,f5_555,"
-                "f6_590,f7_630,f8_680,clear,nir,turbidez_mv,saturado,cv_max"));
+                "f6_590,f7_630,f8_680,clear,nir,turbidez_mv,saturado,cv_max,ph_mv,ph"));
     f.close();
   }
   File f = LittleFS.open(HISTORICO, FILE_READ);
@@ -101,22 +108,19 @@ inline void iniciar(Stream& serial) {
 }
 
 // ---- JSON ---------------------------------------------------------------------
-inline String montarJson(const Medicao& m, const char* data) {
-  char medidoEm[26];
-  wifi_config::agora(medidoEm, sizeof(medidoEm), "%Y-%m-%dT%H:%M:%S-03:00");
-
-  const Diagnostico& d = *m.diagnostico;
+inline String montarJson(const Medicao& m) {
+  const Diagnostico& d = m.diagnostico;
 
   JsonDocument doc;
-  doc["data_coleta"] = data;
-  doc["medido_em"] = medidoEm;  // hora real da medicao
+  doc["data_coleta"] = m.data;
+  doc["medido_em"] = m.medidoEm;  // hora real da medicao
   doc["firmware_version"] = FIRMWARE_VERSAO;
   doc["tipo"] = m.tipo;
   doc["amostra"] = m.amostra;
 
   // Canais crus e desvio padrao (barras de erro no dashboard), ganho e saturacao.
   doc["ganho"] = m.ganho;
-  doc["saturado"] = m.cor->saturado;
+  doc["saturado"] = m.cor.saturado;
   JsonObject media = doc["media"].to<JsonObject>();
   JsonObject desvio = doc["desvio"].to<JsonObject>();
   for (uint8_t c = 0; c < sensor_config::CANAIS; ++c) {
@@ -126,14 +130,14 @@ inline String montarJson(const Medicao& m, const char* data) {
     } else {
       strcpy(chave, c == sensor_config::CLEAR ? "clear" : "nir");
     }
-    media[chave] = serialized(String(m.cor->media[c], 1));
-    desvio[chave] = serialized(String(m.cor->desvio[c], 1));
+    media[chave] = serialized(String(m.cor.media[c], 1));
+    desvio[chave] = serialized(String(m.cor.desvio[c], 1));
   }
 
   // Sensor de turbidez: dados crus sempre (quando ligado) + estado + calibracao.
   //   ntu              = NTU VALIDADO (null enquanto a calibracao nao for validada)
   //   ntu_experimental = estimativa pela curva do fabricante (nao validada)
-  const turbidez_config::Resultado& t = *m.turbidez;
+  const turbidez_config::Resultado& t = m.turbidez;
   JsonObject turbidez = doc["turbidez"].to<JsonObject>();
   turbidez["status"] = turbidez_config::nomeEstado(t.estado());
   turbidez["calibracao_id"] = turbidez_config::CALIBRACAO.id;
@@ -173,13 +177,35 @@ inline String montarJson(const Medicao& m, const char* data) {
   }
   turbidez["classificacao"] = d.turbidez;
 
+  // Sensor de pH: dados crus + estado + calibracao (pendente | 1_ponto | 2_pontos).
+  const ph_config::Resultado& p = m.ph;
+  JsonObject ph = doc["ph"].to<JsonObject>();
+  ph["status"] = ph_config::nomeEstado(p.estado());
+  ph["calibracao_status"] = ph_config::nomeCalibracao();
+  if (p.valido) {
+    ph["adc_raw"] = serialized(String(p.adcBruto, 0));
+    ph["tensao_v"] = serialized(String(p.mediaMv / 1000.0f, 3));
+    ph["desvio_mv"] = serialized(String(p.desvioMv, 0));
+  } else {
+    ph["adc_raw"] = nullptr;
+    ph["tensao_v"] = nullptr;
+    ph["desvio_mv"] = nullptr;
+  }
+  if (p.temPh()) {
+    ph["valor"] = serialized(String(p.ph, 2));
+    ph["classificacao"] = ph_config::classificar(p.ph);
+  } else {
+    ph["valor"] = nullptr;
+    ph["classificacao"] = nullptr;
+  }
+
   // As 8 cores: nome, comprimento de onda, numero captado e % de luz que passou.
   JsonArray cores = doc["cores"].to<JsonArray>();
   for (uint8_t c = 0; c < sensor_config::CORES; ++c) {
     JsonObject cor = cores.add<JsonObject>();
     cor["nome"] = sensor_config::NOME_COR[c];
     cor["comprimento_onda_nm"] = sensor_config::ONDA_NM[c];
-    cor["valor"] = static_cast<uint32_t>(round(m.cor->media[c]));
+    cor["valor"] = static_cast<uint32_t>(round(m.cor.media[c]));
     cor["porcentagem"] = serialized(String(d.porcentagem[c], 1));
   }
 
@@ -194,6 +220,11 @@ inline String montarJson(const Medicao& m, const char* data) {
   } else {
     diag["contaminacao_pct"] = nullptr;
     diag["contaminacao"] = nullptr;
+  }
+  if (d.ph) {
+    diag["ph"] = d.ph;
+  } else {
+    diag["ph"] = nullptr;
   }
   diag["resumo"] = d.resumo;
 
@@ -306,11 +337,8 @@ inline Reenvio reenviarPendentes() {
 }
 
 inline Envio enviar(const Medicao& m) {
-  char data[11];
-  if (!wifi_config::agora(data, sizeof(data), "%Y-%m-%d", 2000)) {
-    return Envio::SEM_DATA;  // sem data a API nao sabe a qual coleta pertence
-  }
-  const String json = montarJson(m, data);
+  if (!m.temData) return Envio::SEM_DATA;  // sem data a API nao sabe a qual coleta pertence
+  const String json = montarJson(m);
   const int codigo = post(json);
   if (codigo >= 200 && codigo < 300) return Envio::ENVIADO;
   if (tentarDeNovo(codigo)) {
@@ -325,11 +353,11 @@ inline Envio enviar(const Medicao& m) {
 
 // ---- Historico CSV (backup de tudo, independe da internet) -----------------------
 inline bool registrar(const Medicao& m) {
-  char quando[20];
-  wifi_config::agora(quando, sizeof(quando), "%Y-%m-%d %H:%M:%S", 50);
+  char quando[20] = "";
+  if (m.temData) snprintf(quando, sizeof(quando), "%.10s %.8s", m.medidoEm, m.medidoEm + 11);
   float cvMax = 0;  // maior variacao (%) entre as 20 leituras, nas 8 cores
   for (uint8_t c = 0; c < sensor_config::CORES; ++c) {
-    if (m.cor->media[c] > 0) cvMax = max(cvMax, m.cor->desvio[c] / m.cor->media[c] * 100.0f);
+    if (m.cor.media[c] > 0) cvMax = max(cvMax, m.cor.desvio[c] / m.cor.media[c] * 100.0f);
   }
   String nome = m.amostra;
   nome.replace(',', '_');  // virgula quebraria as colunas
@@ -341,12 +369,16 @@ inline bool registrar(const Medicao& m) {
   linha += ","; linha += m.ganho;
   for (uint8_t c = 0; c < sensor_config::CANAIS; ++c) {
     linha += ",";
-    linha += String(m.cor->media[c], 1);
+    linha += String(m.cor.media[c], 1);
   }
   linha += ",";
-  if (m.turbidez->valido) linha += String(m.turbidez->mediaMv, 0);
-  linha += m.cor->saturado ? ",1," : ",0,";
+  if (m.turbidez.valido) linha += String(m.turbidez.mediaMv, 0);
+  linha += m.cor.saturado ? ",1," : ",0,";
   linha += String(cvMax, 2);
+  linha += ",";
+  if (m.ph.valido) linha += String(m.ph.mediaMv, 0);
+  linha += ",";
+  if (m.ph.temPh()) linha += String(m.ph.ph, 2);
 
   if (tamanho(HISTORICO) + linha.length() + 2 > LIMITE_HISTORICO) return false;
   File f = LittleFS.open(HISTORICO, FILE_APPEND);

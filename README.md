@@ -1,10 +1,12 @@
 # Qualidade da água medida com luz — ESP32 + AS7341 + lanterna
 
-Baseado no *Guia do projeto para a equipe do hackathon*. Uma lanterna atravessa o pote com água; o sensor de cor AS7341 mede quanto de cada cor passou e o sensor de turbidez mede as partículas. O ESP32 mede a cada 1 minuto, mostra um relatório em palavras e envia para a API.
+Baseado no *Guia do projeto para a equipe do hackathon*. Uma lanterna atravessa o pote com água; o sensor de cor AS7341 mede quanto de cada cor passou, o sensor de turbidez mede as partículas e o eletrodo de pH mede a acidez. O ESP32 mede a cada 10 segundos, mostra um relatório em palavras e envia para a API.
 
 ```
-lanterna → pote com água → AS7341 + sensor de turbidez → ESP32 ──Wi-Fi──▶ API ─▶ banco ─▶ dashboard
+lanterna → pote com água → AS7341 + turbidez + pH → ESP32 ──Wi-Fi──▶ API ─▶ banco ─▶ dashboard
 ```
+
+**Dois núcleos:** o ESP32 tem 2 núcleos. O **núcleo 1** (`loop`) só mede os sensores, mostra o relatório, grava o histórico e põe a medição numa **fila** (até 10 na RAM). O **núcleo 0** (`tarefaEnvio`, o mesmo do Wi-Fi) tira da fila e envia para a API. Assim a espera pela internet (até 30 s no Render) nunca atrasa as medições. Sem internet, as medições vão para a fila da memória flash e são reenviadas depois.
 
 ## Arquivos (`src/`)
 
@@ -13,6 +15,7 @@ lanterna → pote com água → AS7341 + sensor de turbidez → ESP32 ──Wi-F
 | `main.cpp` | Medição automática, botão, comandos e relatório |
 | `sensor_config.h` | Sensor de cor AS7341 (pinos e leitura) |
 | `turbidez_config.h` | Sensor de turbidez (pino, divisor de tensão e leitura) |
+| `ph_config.h` | Sensor de pH (pino, divisor, leitura e calibração) |
 | `wifi_config.h` | Wi-Fi e hora da internet |
 | `dashboard_api.h` | JSON, envio para a API, fila sem internet e histórico CSV |
 | `secrets.h` | Wi-Fi, link e chave da API. **Não vai para o git** |
@@ -42,10 +45,17 @@ constexpr char API_KEY[] = "CHAVE_COMBINADA_COM_O_BACK_END";
 | AS7341 VIN / GND / SDA / SCL | 3V3 / GND / GPIO 21 / GPIO 22 |
 | Turbidez VCC / GND | VIN (5 V) / GND |
 | Turbidez OUT | divisor `OUT ─[10 kΩ]─┬─ GPIO 34`, `└─[10 kΩ]─ GND` (**obrigatório**; 5 V vira 2,5 V) |
+| pH (plaquinha PH-4502C) V+ / G | VIN (5 V) / GND |
+| pH Po | divisor `Po ─[10 kΩ]─┬─ GPIO 35`, `└─[10 kΩ]─ GND` (**obrigatório**). `To` e `Do` ficam soltos |
 
 Chave D/A da plaquinha de turbidez em **A**. Se o sensor de turbidez não estiver ligado, use `INSTALADO = false` em `turbidez_config.h`.
 
 **Turbidez (sensor analógico):** o ESP32 lê o ADC (GPIO 34, 12 bits, atenuação 11 dB, `analogReadMilliVolts`), desfaz o divisor e manda a **tensão e o ADC crus**. A conversão para NTU usa a curva publicada pelo fabricante (DFRobot SEN0189) e está **marcada como experimental**: o modelo do sensor não foi confirmado e a curva nunca foi comparada com padrões de turbidez. Por isso `turbidez.ntu` vai `null` e a estimativa vai em `turbidez.ntu_experimental`; o dashboard usa a luz bloqueada pelo sensor de cor como índice relativo de turbidez. **Para calibrar:** medir padrões de formazina (ou comparar com um turbidímetro de referência), ajustar os coeficientes da `CALIBRACAO` em `turbidez_config.h`, trocar o `id` e marcar `validada = true`. Leituras sem sinal, saturadas, instáveis ou fora da faixa da curva são enviadas com o `status` correspondente, nunca como 0 NTU.
+
+**pH:** o eletrodo vai no conector BNC da plaquinha. A saída `Po` dá ~2,5 V em pH 7 e muda ~0,18 V por unidade de pH (sobe na água ácida). Antes de usar:
+1. Eletrodo novo (ou parado há muito tempo): deixe **8 horas na solução de KCl 3 M** (manual do eletrodo).
+2. **Calibre** com solução padrão: eletrodo na solução, espere 2 minutos e digite `ph 6.86` (ou `ph 7`); lave com água destilada, coloque na outra e digite `ph 4.01` (ou `ph 9.18`). Fica salva na placa. Sem calibrar, o pH vai com `calibracao_status: "pendente"` (valores típicos da plaquinha).
+3. Entre uma água e outra, lave o eletrodo com água destilada; guarde com a tampinha com KCl, nunca seco. O BNC tem que ficar limpo e seco.
 
 ## Uso
 
@@ -53,7 +63,7 @@ Chave D/A da plaquinha de turbidez em **A**. Se o sensor de turbidez não estive
 2. Aperte o botão **BOOT** da placa (ou digite `gravar`) e grave as duas referências. Cada uma mede 3 vezes e fica salva mesmo desligando:
    - `1` **água limpa:** vira o padrão (100% de luz) e o 0% de contaminação;
    - `2` **água suja:** vira o 100% de contaminação.
-3. Coloque a água da lagoa. O aparelho mede **sozinho a cada 1 minuto, sem parar**, e envia cada medição para o dashboard. Se a placa reiniciar, ele volta a medir sozinho com as referências salvas.
+3. Coloque a água da lagoa. O aparelho mede **sozinho a cada 10 segundos, sem parar**, e envia cada medição para o dashboard. Se a placa reiniciar, ele volta a medir sozinho com as referências salvas.
 
 | Comando | O que faz |
 |---|---|
@@ -63,6 +73,8 @@ Chave D/A da plaquinha de turbidez em **A**. Se o sensor de turbidez não estive
 | `p` | Pausar / continuar |
 | `v` | Ver o sensor ao vivo (alinhar a lanterna) |
 | `g N` | Ganho do sensor (1, 2, 4 … 512). Apaga o padrão |
+| `ph N` | Calibrar o pH na solução padrão N (ex.: `ph 6.86`, `ph 4.01`) |
+| `ph apagar` | Apagar a calibração do pH |
 | `e` | Exportar o histórico CSV |
 | `apagar sim` | Apagar o histórico (baixe antes) |
 
@@ -83,7 +95,7 @@ Mudou alguma coisa (lanterna, pote, água de referência)? Aperte o botão **BOO
 - **Wi-Fi:** o ESP32 conecta em qualquer uma das redes do `secrets.h` (até 5) e pega a hora da internet. Se cair, ele tenta de novo a cada medição. Embaixo de cada relatório aparece `✓ Enviado com sucesso` ou `✗ Erro:` com o motivo.
 - **API:** cada medição vai por `POST {API_URL}/api/leituras/` com o header `X-API-Key` (formato abaixo). A API deve responder 201; com 401/400 o ESP32 mostra o erro, e sem resposta ou com 5xx ele guarda e reenvia depois.
 - **Sem internet:** as medições ficam numa fila na placa e são reenviadas depois.
-- **Histórico:** toda medição também fica em `historico.csv` na placa (~4,5 dias). Exporte com `e`.
+- **Histórico:** toda medição também fica em `historico.csv` na placa (~4,5 dias). Exporte com `e`. As colunas `ph_mv,ph` ficam no final (num histórico antigo o cabeçalho não tem esses nomes: `apagar sim` depois de exportar).
 - **Monitor:** tudo que aparece no monitor serial também fica salvo em `logs/`.
 
 ## JSON enviado para a API
@@ -98,12 +110,17 @@ Mudou alguma coisa (lanterna, pote, água de referência)? Aperte o botão **BOO
   "saturado": false,
   "media": { "f1_415": 2394.0, "f2_445": 4802.0, "...": "...", "clear": 31200.0, "nir": 1650.0 },
   "desvio": { "f1_415": 8.1, "f2_445": 11.3, "...": "...", "clear": 40.2, "nir": 6.0 },
-  "firmware_version": "2026.10.21-turbidez-v2",
+  "firmware_version": "2026.11.17-ph-v1",
   "turbidez": {
     "status": "ok", "calibracao_id": "dfrobot-sen0189-fabricante-v1", "calibracao_status": "pendente",
     "adc_raw": 2290, "tensao_v": 3.692, "desvio_mv": 8,
     "ntu_experimental": 1593.0, "ntu": null,
     "luz_bloqueada_pct": 12.5, "classificacao": "LEVEMENTE TURVA"
+  },
+  "ph": {
+    "status": "ok", "calibracao_status": "2_pontos",
+    "adc_raw": 1480, "tensao_v": 2.536, "desvio_mv": 4,
+    "valor": 6.80, "classificacao": "NORMAL"
   },
   "cores": [
     { "nome": "Violeta",       "comprimento_onda_nm": 415, "valor": 2394,  "porcentagem": 57.0 },
@@ -121,7 +138,8 @@ Mudou alguma coisa (lanterna, pote, água de referência)? Aperte o botão **BOO
     "cor": "NORMAL",
     "contaminacao_pct": 20,
     "contaminacao": "LEVEMENTE CONTAMINADA",
-    "resumo": "Agua levemente turva, com sinal fraco de algas, cor normal."
+    "ph": "NORMAL",
+    "resumo": "Agua levemente turva, com sinal fraco de algas, cor normal, pH 6.8 (normal)."
   }
 }
 ```
@@ -132,6 +150,7 @@ Mudou alguma coisa (lanterna, pote, água de referência)? Aperte o botão **BOO
 - `turbidez.luz_bloqueada_pct`: turbidez pelo sensor de cor (AS7341): % da luz bloqueada em 590–630 nm, faixa onde a cor da água e a clorofila quase não absorvem (mesma ideia da ISO 7027). Vem sempre.
 - `turbidez.status`: `ok`, `sem_sinal`, `saturado`, `instavel`, `fora_da_faixa_da_curva` ou `desativado`. `turbidez.ntu` = NTU **validado** (null enquanto `calibracao_status` = `pendente`); `ntu_experimental` = estimativa pela curva do fabricante.
 - `turbidez.classificacao`: palavra pela luz bloqueada do sensor de cor; pelas faixas da lei (NTU) só com calibração validada.
+- `ph.valor`: pH de 0 a 14 (null se a leitura falhou). `ph.status`: `ok`, `sem_sinal`, `saturado`, `instavel`, `fora_da_faixa` ou `desativado`. `ph.calibracao_status`: `pendente` (sem calibrar), `1_ponto` ou `2_pontos`. `ph.classificacao`: `ACIDA` (< 6), `NORMAL` (6 a 9, CONAMA 357) ou `ALCALINA` (> 9).
 - `contaminacao_pct`: 0 = água limpa, 100 = água podre de referência. Vem `null` até gravar a água suja.
 
 ## Limites
